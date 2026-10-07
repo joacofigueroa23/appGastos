@@ -1,0 +1,6 @@
+{
+  "name": "GastosFamilia - Control Financiero y Bot WhatsApp",
+  "description": "Registro automatizado de gastos familiares por WhatsApp, calendario de vencimientos de tarjetas y servicios, y reportes mensuales centrales.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
