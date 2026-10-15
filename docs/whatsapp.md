@@ -45,6 +45,22 @@ solo devuelve indicadores de presencia e ID enmascarado; nunca devuelve el verif
 POST /api/whatsapp/config responde 403 en modo normal.
 Tras cambiar .env, reiniciar Express.
 
+## Token permanente (que no venza)
+
+El token de la página "API Setup" de Meta es temporal: vence a las 24 h y las respuestas
+dejan de salir (error 190, last_error reply_failed:meta_token_expired). Al arrancar, Express
+consulta el estado del token y avisa en consola si está vencido, por vencer o es temporal.
+
+Generar un token de System User sin vencimiento:
+1. business.facebook.com → Configuración del negocio → Usuarios → Usuarios del sistema → Agregar.
+   Nombre a elección, rol Administrador.
+2. En ese usuario: Asignar activos → Apps → tu app → Control total.
+   Luego Cuentas de WhatsApp → la cuenta del número → Control total.
+3. Generar token → elegir la app → Vencimiento: **Nunca** → permisos
+   whatsapp_business_messaging y whatsapp_business_management → Generar. Copiarlo una vez.
+4. Reemplazar WHATSAPP_ACCESS_TOKEN en .env y reiniciar Express. No debe aparecer el aviso
+   meta_token_*. Si el token se filtra, revocarlo desde el mismo usuario del sistema.
+
 ## Migración mínima
 
 20261011213315_whatsapp_text_inbox.sql crea appgastos.whatsapp_messages:

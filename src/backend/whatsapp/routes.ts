@@ -5,13 +5,19 @@ import {resolveFamilyId} from '../expenses/service';
 import {normalizePhone,validSignature} from './security';
 import {enqueue,type IncomingMessage} from './repository';
 import {geminiInterpreter,type Interpreter} from './interpretation';
-import {metaSender,type ReplySender} from './transport';
+import {metaSender,metaTokenStatus,type ReplySender} from './transport';
 import {whatsappProcessor} from './processor';
 export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean}
 export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOptions={}){
  const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender()):null;
  const configured=!!((options.secret??process.env.WHATSAPP_APP_SECRET)&&(options.phoneNumberId??process.env.WHATSAPP_PHONE_NUMBER_ID));
  const stop=options.startWorker===false||!configured?()=>{}:processor?.start()||(()=>{});
+ // Aviso temprano: un token temporal de Meta vence a las 24 h y las respuestas dejan de salir.
+ if(options.startWorker!==false&&configured&&!options.send)void metaTokenStatus().then(status=>{
+  if(status==='expired')console.warn('whatsapp: meta_token_expired — generar un token permanente de System User (docs/whatsapp.md)');
+  else if(status==='expires_soon')console.warn('whatsapp: meta_token_expires_soon — reemplazarlo por un token permanente de System User');
+  else if(status==='ok')console.warn('whatsapp: meta_token_temporary — vence; usar un token permanente de System User');
+ });
  app.get('/api/whatsapp/webhook',(req,res)=>{
   const token=options.verifyToken??process.env.WHATSAPP_VERIFY_TOKEN;
   if(token&&req.query['hub.mode']==='subscribe'&&req.query['hub.verify_token']===token&&typeof req.query['hub.challenge']==='string')return void res.status(200).send(req.query['hub.challenge']);

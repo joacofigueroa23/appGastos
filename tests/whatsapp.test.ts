@@ -13,7 +13,7 @@ import {enqueue,claim} from '../src/backend/whatsapp/repository';
 import {whatsappProcessor} from '../src/backend/whatsapp/processor';
 import {registerWhatsApp} from '../src/backend/whatsapp/routes';
 import {registerDatabaseApi} from '../src/backend/expenses/routes';
-import {recipientNumber} from '../src/backend/whatsapp/transport';
+import {recipientNumber,metaTokenStatus} from '../src/backend/whatsapp/transport';
 
 const member={id:randomUUID(),name:'Ana',active:true};
 const category={id:randomUUID(),name:'Supermercado',active:true};
@@ -181,6 +181,18 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
   assert.equal(recipientNumber('5493512010915'),'543512010915');
   assert.equal(recipientNumber('5491144445555'),'541144445555');
   for(const n of ['541144445555','14155550123','598991234567','549351201091'])assert.equal(recipientNumber(n),n);
+ });
+ await t.test('estado del token de Meta: permanente, temporal, por vencer y vencido',async()=>{
+  const previous=process.env.WHATSAPP_ACCESS_TOKEN;process.env.WHATSAPP_ACCESS_TOKEN='test-token';
+  const now=Date.parse('2026-10-15T12:00:00Z'),fake=(body:unknown)=>(async()=>({json:async()=>body})) as unknown as typeof fetch;
+  try{
+   assert.equal(await metaTokenStatus(now,fake({data:{is_valid:true,expires_at:0}})),'never');
+   assert.equal(await metaTokenStatus(now,fake({data:{is_valid:true,expires_at:now/1000+30*86400}})),'ok');
+   assert.equal(await metaTokenStatus(now,fake({data:{is_valid:true,expires_at:now/1000+3600}})),'expires_soon');
+   assert.equal(await metaTokenStatus(now,fake({error:{code:190}})),'expired');
+   assert.equal(await metaTokenStatus(now,fake({data:{is_valid:false}})),'expired');
+   assert.equal(await metaTokenStatus(now,(async()=>{throw new Error();}) as unknown as typeof fetch),'unknown');
+  }finally{if(previous===undefined)delete process.env.WHATSAPP_ACCESS_TOKEN;else process.env.WHATSAPP_ACCESS_TOKEN=previous;}
  });
  await t.test('teléfonos: solo formato, sin prefijos inventados',()=>{
   assert.equal(normalizePhone('+54 (9) 11-4444-5555'),'5491144445555');

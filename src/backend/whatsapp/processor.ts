@@ -82,10 +82,11 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
   const row=await claim(pool,true);if(!row)return false;
   try{
    await send(row.sender,row.reply_text);
-   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state='sent',reply_lease_token=NULL,reply_lease_until=NULL,last_error=CASE WHEN last_error='reply_failed' THEN NULL ELSE last_error END WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token]);
-  }catch{
-   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state=$3,reply_lease_token=NULL,reply_lease_until=NULL,last_error='reply_failed',reply_next_attempt_at=now()+interval '30 seconds' WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token,row.reply_attempts>=5?'failed':'pending']);
-   console.warn('whatsapp: reply_failed');
+   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state='sent',reply_lease_token=NULL,reply_lease_until=NULL,last_error=CASE WHEN last_error LIKE 'reply_failed%' THEN NULL ELSE last_error END WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token]);
+  }catch(error){
+   const code=error instanceof Error&&/^meta_[a-z_]+$/.test(error.message)?'reply_failed:'+error.message:'reply_failed';
+   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state=$3,reply_lease_token=NULL,reply_lease_until=NULL,last_error=$4,reply_next_attempt_at=now()+interval '30 seconds' WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token,row.reply_attempts>=5?'failed':'pending',code]);
+   console.warn('whatsapp: '+code);
   }
   return true;
  }
