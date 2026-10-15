@@ -1,12 +1,12 @@
 
 import test from 'node:test';
 import {spawnSync} from 'node:child_process';
-import {readdirSync} from 'node:fs';
+import {readdirSync,readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import express from 'express';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {isolatedDatabase} from './helpers/postgres';
-import {migrate} from '../scripts/migrate';
+import {checksumVariants,migrate} from '../scripts/migrate';
 import {seed,INITIAL_FAMILY_ID} from '../scripts/seed';
 import {registerDatabaseApi} from '../src/backend/expenses/routes';
 import {createDatabasePool} from '../src/backend/db/pool';
@@ -20,6 +20,18 @@ test('API y restricciones sobre PostgreSQL temporal real',{timeout:90000},async(
   }
   await migrate(db.pool);await migrate(db.pool);await seed(db.pool,INITIAL_FAMILY_ID,'Prueba');await seed(db.pool,INITIAL_FAMILY_ID,'Prueba');
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.schema_migrations')).rows[0].n,readdirSync('supabase/migrations').filter(n=>n.endsWith('.sql')).length);
+  // Una migración aplicada con otros finales de línea (LF/CRLF) no se considera modificada; un cambio real sí.
+  const first=readdirSync('supabase/migrations').filter(n=>n.endsWith('.sql')).sort()[0];
+  const sql=readFileSync('supabase/migrations/'+first,'utf8').replace(/\r\n/g,'\n');
+  const original=(await db.pool.query('SELECT checksum FROM appgastos.schema_migrations WHERE name=$1',[first])).rows[0].checksum;
+  for(const variant of [sql,sql.replace(/\n/g,'\r\n')]){
+   await db.pool.query('UPDATE appgastos.schema_migrations SET checksum=$2 WHERE name=$1',[first,createHash('sha256').update(variant).digest('hex')]);
+   await migrate(db.pool);
+  }
+  assert.ok(checksumVariants(sql+'\n-- cambio real').every(c=>!checksumVariants(sql).includes(c)));
+  await db.pool.query('UPDATE appgastos.schema_migrations SET checksum=$2 WHERE name=$1',[first,createHash('sha256').update(sql+'-- otro contenido').digest('hex')]);
+  await assert.rejects(migrate(db.pool),/Migración aplicada modificada/);
+  await db.pool.query('UPDATE appgastos.schema_migrations SET checksum=$2 WHERE name=$1',[first,original]);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n,0);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.cards')).rows[0].n,0);
   const app=express();app.use(express.json());registerDatabaseApi(app,db.pool,INITIAL_FAMILY_ID);
