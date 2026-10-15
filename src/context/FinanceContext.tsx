@@ -14,19 +14,39 @@ import {
   INITIAL_EXPENSES,
 } from '../data/initialData';
 
+import { PRIMARY_CURRENCY } from '../data/financeCatalog';
+import { expensesForMonth, persistExpenseList, sumAmounts, todayDateOnly, validateExpense } from '../utils/finance';
+
+import { DatabaseFinanceProvider } from './DatabaseFinanceProvider';
+import type { ApiCard, ApiCategory, ApiExpense, ApiMember, ExpenseWrite, CardWrite, MemberWrite } from '../shared/apiTypes';
 interface FinanceContextType {
+  isDemoMode: boolean;
+  apiExpenses?: ApiExpense[];
+  categories?: ApiCategory[];
+  apiCards?: ApiCard[];
+  apiMembers?: ApiMember[];
+  loading?: boolean;
+  error?: string | null;
+  refresh?: () => Promise<void>;
+  createDatabaseExpense?: (input:ExpenseWrite) => Promise<ApiExpense>;
+  updateDatabaseExpense?: (id:string,input:Partial<ExpenseWrite>) => Promise<ApiExpense>;
+  createDatabaseCard?: (input:CardWrite) => Promise<ApiCard>;
+  updateDatabaseCard?: (id:string,input:Partial<CardWrite>) => Promise<ApiCard>;
+  createDatabaseMember?: (input:MemberWrite) => Promise<ApiMember>;
+  updateDatabaseMember?: (id:string,input:Partial<MemberWrite>) => Promise<ApiMember>;
   members: FamilyMember[];
   activeMemberId: string;
   setActiveMemberId: (id: string) => void;
   cards: CreditCard[];
   bills: BillDue[];
   expenses: Expense[];
+  currentMonthExpenses: Expense[];
   whatsappLogs: WhatsAppLog[];
   whatsappConfig: WhatsAppWebhookConfig;
   
   // Acciones de Gastos
   addExpense: (expense: Omit<Expense, 'id' | 'createdAt'>) => void;
-  deleteExpense: (id: string) => void;
+  deleteExpense: (id: string) => void | Promise<void>;
   
   // Acciones de Cuentas y Vencimientos
   addBill: (bill: Omit<BillDue, 'id'>) => void;
@@ -61,9 +81,9 @@ interface FinanceContextType {
   };
 }
 
-const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
+export const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
 
-export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const LegacyFinanceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [members, setMembers] = useState<FamilyMember[]>(() => {
     const saved = localStorage.getItem('gf_members');
     return saved ? JSON.parse(saved) : INITIAL_MEMBERS;
@@ -89,7 +109,7 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [whatsappLogs, setWhatsappLogs] = useState<WhatsAppLog[]>([]);
 
   const [whatsappConfig, setWhatsappConfig] = useState<WhatsAppWebhookConfig>({
-    verifyToken: 'gastos_familia_meta_2026',
+    verifyToken: '',
     phoneNumberId: '',
     accessToken: '',
     businessAccountId: '',
@@ -107,10 +127,6 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   useEffect(() => {
     localStorage.setItem('gf_bills', JSON.stringify(bills));
   }, [bills]);
-
-  useEffect(() => {
-    localStorage.setItem('gf_expenses', JSON.stringify(expenses));
-  }, [expenses]);
 
   // Sincronizar logs y config de WhatsApp con el servidor
   const refreshWhatsAppLogs = async () => {
@@ -144,25 +160,36 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       .catch((e) => console.log('Config API en inicio:', e));
   }, []);
 
-  const formatCurrency = (amount: number, _currency = 'ARS') => {
+  const formatCurrency = (amount: number, currency = PRIMARY_CURRENCY) => {
     return new Intl.NumberFormat('es-AR', {
       style: 'currency',
-      currency: 'ARS',
-      maximumFractionDigits: 0,
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(amount);
   };
 
   const addExpense = (newExpData: Omit<Expense, 'id' | 'createdAt'>) => {
+    validateExpense(newExpData);
+    const reporter = newExpData.reportedByMemberId || newExpData.paidByMemberId;
+    if (!members.some((m) => m.id === reporter)) throw new Error('El integrante seleccionado ya no existe.');
+    if (newExpData.cardId && !cards.some((c) => c.id === newExpData.cardId && c.active !== false)) {
+      throw new Error('La tarjeta seleccionada ya no está disponible.');
+    }
     const newExpense: Expense = {
       ...newExpData,
       id: `exp-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       createdAt: new Date().toISOString(),
     };
-    setExpenses((prev) => [newExpense, ...prev]);
+    const nextExpenses = [newExpense, ...expenses];
+    persistExpenseList(localStorage, nextExpenses);
+    setExpenses(nextExpenses);
   };
 
   const deleteExpense = (id: string) => {
-    setExpenses((prev) => prev.filter((e) => e.id !== id));
+    const nextExpenses = expenses.filter((e) => e.id !== id);
+    persistExpenseList(localStorage, nextExpenses);
+    setExpenses(nextExpenses);
   };
 
   const addBill = (billData: Omit<BillDue, 'id'>) => {
@@ -181,7 +208,7 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
         return {
           ...b,
           status: isPaid ? 'pending' : 'paid',
-          paidDate: isPaid ? undefined : new Date().toISOString().split('T')[0],
+          paidDate: isPaid ? undefined : todayDateOnly(),
           paidByMemberId: isPaid ? undefined : memberId || activeMemberId,
         };
       })
@@ -195,6 +222,7 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const addCard = (cardData: Omit<CreditCard, 'id'>) => {
     const newCard: CreditCard = {
       ...cardData,
+      active: cardData.active ?? true,
       id: `card-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     };
     setCards((prev) => [...prev, newCard]);
@@ -254,24 +282,22 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (data.success && data.extractedExpense) {
         const ext = data.extractedExpense;
 
-        // Si se extrajo una tarjeta, vincular con la primera que coincida o una del miembro
-        let matchedCard = cards.find((c) =>
-          ext.cardName && c.name.toLowerCase().includes(ext.cardName.toLowerCase())
-        );
-        if (!matchedCard && ext.paymentMethod === 'Tarjeta de Crédito') {
-          matchedCard = cards.find((c) => c.ownerMemberId === member.id) || cards[0];
-        }
+        // Únicamente una coincidencia inequívoca, nunca una tarjeta predeterminada.
+        const matchingCards = cards.filter((c) => c.active !== false && ext.cardName &&
+          c.name.toLowerCase() === ext.cardName.toLowerCase());
+        const matchedCard = matchingCards.length === 1 ? matchingCards[0] : undefined;
 
         // Agregar gasto a la lista oficial de la app
         addExpense({
-          description: ext.description || message.slice(0, 40),
-          amount: ext.amount || 1000,
-          currency: ext.currency || 'ARS',
-          category: ext.category || 'Otros',
-          date: new Date().toISOString().split('T')[0],
-          paymentMethod: ext.paymentMethod || 'Tarjeta de Crédito',
+          description: ext.description,
+          amount: ext.amount,
+          currency: ext.currency,
+          category: ext.category,
+          date: todayDateOnly(),
+          paymentMethod: ext.paymentMethod,
           cardId: matchedCard?.id,
           paidByMemberId: member.id,
+          reportedByMemberId: member.id,
           isShared: ext.isShared ?? true,
           installmentTotal: ext.installmentTotal || 1,
           installmentCurrent: ext.installmentCurrent || 1,
@@ -286,24 +312,9 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
       return { replyMessage: 'No se pudo interpretar el gasto.', success: false };
     } catch (err) {
       console.error('Error en simulación:', err);
-      // Fallback local en caso de falla de red
-      addExpense({
-        description: message.slice(0, 40) || 'Gasto registrado',
-        amount: 5000,
-        currency: 'ARS',
-        category: 'Alimentación & Salidas',
-        date: new Date().toISOString().split('T')[0],
-        paymentMethod: 'Tarjeta de Débito',
-        paidByMemberId: member.id,
-        isShared: true,
-        installmentTotal: 1,
-        installmentCurrent: 1,
-        source: 'whatsapp',
-        whatsappMessage: message,
-      });
       return {
-        replyMessage: `✅ Registrado gasto de prueba para ${member.name}.`,
-        success: true,
+        replyMessage: 'No se pudo registrar el gasto. No se guardaron datos de prueba.',
+        success: false,
       };
     }
   };
@@ -312,27 +323,25 @@ export const FinanceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const now = new Date();
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-  const currentMonthExpenses = expenses.filter((e) => e.date.startsWith(currentMonthStr));
-  const totalSpent = currentMonthExpenses.reduce((acc, curr) => acc + curr.amount, 0);
-  const sharedTotal = currentMonthExpenses
-    .filter((e) => e.isShared)
-    .reduce((acc, curr) => acc + curr.amount, 0);
-  const personalTotal = currentMonthExpenses
-    .filter((e) => !e.isShared)
-    .reduce((acc, curr) => acc + curr.amount, 0);
+  const currentMonthExpenses = expensesForMonth(expenses, currentMonthStr);
+  const totalSpent = sumAmounts(currentMonthExpenses);
+  const sharedTotal = sumAmounts(currentMonthExpenses.filter((e) => e.isShared));
+  const personalTotal = sumAmounts(currentMonthExpenses.filter((e) => !e.isShared));
 
-  const pendingBills = bills.filter((b) => b.status === 'pending');
-  const totalPendingBills = pendingBills.reduce((acc, b) => acc + b.amount, 0);
+  const pendingBills = bills.filter((b) => b.status === 'pending' && b.dueDate.slice(0, 7) === currentMonthStr);
+  const totalPendingBills = sumAmounts(pendingBills);
 
   return (
     <FinanceContext.Provider
       value={{
+        isDemoMode: true,
         members,
         activeMemberId,
         setActiveMemberId,
         cards,
         bills,
         expenses,
+        currentMonthExpenses,
         whatsappLogs,
         whatsappConfig,
         addExpense,
@@ -369,3 +378,9 @@ export const useFinance = () => {
   }
   return context;
 };
+
+// Demo opt-in: datos anteriores preservados, sin activar gastos ficticios en producción.
+export const FinanceProvider:React.FC<{children:ReactNode}> = ({children}) =>
+  import.meta.env.VITE_ENABLE_DEMO === 'true'
+    ? <LegacyFinanceProvider>{children}</LegacyFinanceProvider>
+    : <DatabaseFinanceProvider>{children}</DatabaseFinanceProvider>;

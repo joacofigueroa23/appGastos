@@ -5,30 +5,30 @@ import {
   Calendar,
   Receipt,
   BarChart3,
-  Plus,
   CreditCard,
   MessageCircle,
+  Users,
 } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
-  onOpenAddExpense: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   onSelectTab,
-  onOpenAddExpense,
 }) => {
-  const { members, activeMemberId, setActiveMemberId } = useFinance();
+  const { members, activeMemberId, setActiveMemberId, isDemoMode, apiMembers=[] } = useFinance();
   const currentMember = members.find((m) => m.id === activeMemberId) || members[0];
 
+  const selectableMembers=isDemoMode?members:members.filter(m=>apiMembers.some(api=>api.id===m.id&&api.active));
   const navItems = [
     { id: 'dashboard', label: 'Panel Central', icon: Wallet },
     { id: 'calendar', label: 'Vencimientos & Tarjetas', icon: Calendar },
     { id: 'expenses', label: 'Historial de Gastos', icon: Receipt },
     { id: 'analysis', label: 'Patrones & Balances', icon: BarChart3 },
+    ...(!isDemoMode?[{id:'family',label:'Tarjetas e integrantes',icon:Users}]:[]),
   ];
 
   return (
@@ -56,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-800 text-[11px] font-semibold rounded-full border border-emerald-200/70">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
-              <span>WhatsApp: +54 9 11 3840-9123</span>
+              <span>WhatsApp: agregar</span>
             </div>
           </div>
 
@@ -88,7 +88,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Selector de Miembro */}
             <div className="flex items-center gap-1.5 bg-slate-100/90 p-1 pl-2.5 pr-1.5 rounded-xl border border-slate-200/60">
               <span className="text-base select-none" aria-hidden="true">
-                {currentMember.avatar}
+                {currentMember?.avatar || '●'}
               </span>
               <select
                 aria-label="Seleccionar miembro de la familia"
@@ -96,7 +96,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onChange={(e) => setActiveMemberId(e.target.value)}
                 className="text-xs font-semibold text-slate-800 bg-transparent border-0 focus:ring-0 cursor-pointer pr-1 py-1 outline-none"
               >
-                {members.map((m) => (
+                <option value="">Sin integrante especificado</option>
+                {selectableMembers.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name.split(' ')[0]}
                   </option>
@@ -104,14 +105,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               </select>
             </div>
 
-            {/* Botón Nuevo Gasto */}
-            <button
-              onClick={onOpenAddExpense}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl transition-all shadow-sm shadow-blue-500/20 whitespace-nowrap cursor-pointer"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>+ Gasto</span>
-            </button>
 
           </div>
 

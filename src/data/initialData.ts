@@ -3,7 +3,7 @@ import { FamilyMember, CreditCard, BillDue, Expense } from '../types';
 export const INITIAL_MEMBERS: FamilyMember[] = [
   {
     id: 'mem-1',
-    name: 'Martín (Papá)',
+    name: 'joaquin',
     avatar: '👨‍💼',
     role: 'admin',
     color: '#2563EB',
@@ -12,7 +12,7 @@ export const INITIAL_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'mem-2',
-    name: 'Laura (Mamá)',
+    name: 'papa',
     avatar: '👩‍⚕️',
     role: 'admin',
     color: '#059669',
@@ -21,7 +21,7 @@ export const INITIAL_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'mem-3',
-    name: 'Sofía (Hija)',
+    name: 'pilar',
     avatar: '👩‍🎓',
     role: 'member',
     color: '#7C3AED',
@@ -30,7 +30,7 @@ export const INITIAL_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'mem-4',
-    name: 'Lucas (Hijo)',
+    name: 'matias',
     avatar: '👦',
     role: 'teen',
     color: '#D97706',
@@ -42,11 +42,11 @@ export const INITIAL_MEMBERS: FamilyMember[] = [
 export const INITIAL_CARDS: CreditCard[] = [
   {
     id: 'card-1',
-    name: 'Visa Signature',
-    bank: 'Santander',
+    name: 'mercado pago',
+    bank: 'mp',
     lastDigits: '4590',
-    closingDay: 23,
-    dueDay: 6,
+    closingDay: 8,
+    dueDay: 8,
     creditLimit: 1800000,
     ownerMemberId: 'mem-1',
     color: '#DC2626',

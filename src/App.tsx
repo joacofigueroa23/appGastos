@@ -4,7 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { FinanceProvider } from './context/FinanceContext';
+import { FinanceProvider, useFinance } from './context/FinanceContext';
+import { FamilyManagementView } from './components/FamilyManagementView';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
 import { CalendarView } from './components/CalendarView';
@@ -13,6 +14,7 @@ import { AnalysisView } from './components/AnalysisView';
 import { AddExpenseModal } from './components/AddExpenseModal';
 
 export function AppContent() {
+  const {isDemoMode}=useFinance();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isAddExpenseOpen, setIsAddExpenseOpen] = useState<boolean>(false);
 
@@ -23,7 +25,6 @@ export function AppContent() {
       <Navbar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
-        onOpenAddExpense={() => setIsAddExpenseOpen(true)}
       />
 
       {/* Contenedor Principal de Vistas */}
@@ -35,13 +36,15 @@ export function AppContent() {
           />
         )}
 
-        {currentTab === 'calendar' && <CalendarView />}
+        {currentTab === 'calendar' && (isDemoMode ? <CalendarView /> : <p>Calendario y vencimientos preservados en modo demo; fuera de prioridad actual.</p>)}
+
+        {currentTab==='family'&&!isDemoMode&&<FamilyManagementView/>}
 
         {currentTab === 'expenses' && (
           <ExpensesView onOpenAddExpense={() => setIsAddExpenseOpen(true)} />
         )}
 
-        {currentTab === 'analysis' && <AnalysisView />}
+        {currentTab === 'analysis' && (isDemoMode ? <AnalysisView /> : <p>Análisis anteriores y compensaciones preservados en modo demo; fuera de prioridad actual.</p>)}
       </main>
 
       {/* Pie de Página Editorial y Discreto */}
@@ -50,7 +53,7 @@ export function AppContent() {
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-800">GastosFamilia</span>
             <span>·</span>
-            <span>Finanzas del Hogar & WhatsApp Conectado (+54 9 11 3840-9123)</span>
+            <span>Finanzas del Hogar & WhatsApp Conectar</span>
           </div>
 
           <div className="flex items-center gap-4">

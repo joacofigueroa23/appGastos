@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { isDateOnly, parseAmountInput, todayDateOnly } from '../utils/finance';
 import { useFinance } from '../context/FinanceContext';
 import { CreditCard as CardType, BillDue } from '../types';
 import {
@@ -39,7 +40,7 @@ export const CalendarView: React.FC = () => {
   const [newBillCategory, setNewBillCategory] = useState('Servicios Básicos');
   const [newBillAmount, setNewBillAmount] = useState('');
   const [newBillDueDate, setNewBillDueDate] = useState(
-    new Date().toISOString().split('T')[0]
+    todayDateOnly()
   );
   const [newBillAutoDebit, setNewBillAutoDebit] = useState(false);
 
@@ -72,9 +73,8 @@ export const CalendarView: React.FC = () => {
   }
 
   bills.forEach((b) => {
-    const bDate = new Date(b.dueDate);
-    if (bDate.getFullYear() === year && bDate.getMonth() === month) {
-      const day = bDate.getDate();
+    const [billYear, billMonth, day] = b.dueDate.split('-').map(Number);
+    if (isDateOnly(b.dueDate) && billYear === year && billMonth === month + 1) {
       if (eventsByDay[day]) {
         eventsByDay[day].bills.push(b);
       }
@@ -102,8 +102,8 @@ export const CalendarView: React.FC = () => {
 
   const handleCreateBill = (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = parseFloat(newBillAmount.replace(/\./g, '').replace(',', '.'));
-    if (!newBillTitle.trim() || isNaN(amount) || amount <= 0) return;
+    const amount = parseAmountInput(newBillAmount);
+    if (!newBillTitle.trim() || !Number.isFinite(amount) || amount <= 0 || !isDateOnly(newBillDueDate)) return;
 
     addBill({
       title: newBillTitle.trim(),
@@ -122,10 +122,11 @@ export const CalendarView: React.FC = () => {
 
   const handleCreateCard = (e: React.FormEvent) => {
     e.preventDefault();
-    const limit = parseFloat(newCardLimit.replace(/\./g, '').replace(',', '.'));
-    if (!newCardName.trim() || !newCardBank.trim() || isNaN(limit)) return;
+    const limit = parseAmountInput(newCardLimit);
+    if (!newCardName.trim() || !newCardBank.trim() || !Number.isFinite(limit) || limit < 0) return;
 
     addCard({
+      active: true,
       name: newCardName.trim(),
       bank: newCardBank.trim(),
       lastDigits: newCardDigits.slice(-4) || '0000',
@@ -574,6 +575,8 @@ export const CalendarView: React.FC = () => {
                 </label>
                 <input
                   type="number"
+                  step="0.01"
+                  min="0.01"
                   required
                   placeholder="0"
                   value={newBillAmount}
@@ -685,6 +688,8 @@ export const CalendarView: React.FC = () => {
                   </label>
                   <input
                     type="number"
+                    step="0.01"
+                    min="0"
                     placeholder="1500000"
                     value={newCardLimit}
                     onChange={(e) => setNewCardLimit(e.target.value)}

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { expensesForMonth, sumAmounts, totalsByCategory } from '../utils/finance';
 import { useFinance } from '../context/FinanceContext';
 import {
   TrendingUp,
@@ -23,13 +24,13 @@ export const AnalysisView: React.FC = () => {
   const [settledFeedback, setSettledFeedback] = useState(false);
 
   // Filtrar gastos del mes seleccionado
-  const monthExpenses = expenses.filter((e) => e.date.startsWith(selectedMonth));
-  const totalSpent = monthExpenses.reduce((acc, e) => acc + e.amount, 0);
+  const monthExpenses = expensesForMonth(expenses, selectedMonth);
+  const totalSpent = sumAmounts(monthExpenses);
   const sharedExpenses = monthExpenses.filter((e) => e.isShared);
   const personalExpenses = monthExpenses.filter((e) => !e.isShared);
 
-  const totalShared = sharedExpenses.reduce((acc, e) => acc + e.amount, 0);
-  const totalPersonal = personalExpenses.reduce((acc, e) => acc + e.amount, 0);
+  const totalShared = sumAmounts(sharedExpenses);
+  const totalPersonal = sumAmounts(personalExpenses);
 
   // Cálculos de compensación entre adultos
   const contributingMembers = members.filter((m) => m.role === 'admin' || m.monthlyBudget >= 100000);
@@ -69,18 +70,15 @@ export const AnalysisView: React.FC = () => {
   const p21_31 = totalSpent ? Math.round((bracket21_31 / totalSpent) * 100) : 0;
 
   // Categorías
-  const categoryMap: Record<string, number> = {};
-  monthExpenses.forEach((e) => {
-    categoryMap[e.category] = (categoryMap[e.category] || 0) + e.amount;
-  });
-  const sortedCategories = Object.entries(categoryMap).sort((a, b) => b[1] - a[1]);
+  const sortedCategories = totalsByCategory(monthExpenses);
 
   // Exportar CSV
   const handleExportCSV = () => {
-    const headers = ['Fecha', 'Descripción', 'Categoría', 'Monto', 'Medio de Pago', 'Pagado Por', 'Tipo'];
-    const rows = monthExpenses.map((e) => {
+    const headers = ['Moneda', 'Fecha', 'Descripción', 'Categoría', 'Monto', 'Medio de Pago', 'Pagado Por', 'Tipo'];
+    const rows = expenses.filter((e) => e.date.slice(0, 7) === selectedMonth).map((e) => {
       const member = members.find((m) => m.id === e.paidByMemberId);
       return [
+        e.currency,
         e.date,
         `"${e.description.replace(/"/g, '""')}"`,
         e.category,
@@ -103,6 +101,7 @@ export const AnalysisView: React.FC = () => {
   return (
     <div className="space-y-6">
       
+      <p className="text-xs text-slate-500">Análisis y balances en ARS. Compensaciones: fuera de prioridad del MVP actual.</p>
       {/* Encabezado Principal y Controles */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

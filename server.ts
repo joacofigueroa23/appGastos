@@ -5,6 +5,13 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
+import { EXPENSE_CATEGORIES, PAYMENT_METHODS } from './src/data/financeCatalog';
+import { todayDateOnly } from './src/utils/finance';
+
+import { createDatabasePool } from './src/backend/db/pool';
+import { registerDatabaseApi } from './src/backend/expenses/routes';
+import { registerWhatsApp } from './src/backend/whatsapp/routes';
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,12 +20,19 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const databasePool = process.env.DATABASE_URL ? createDatabasePool(process.env.DATABASE_URL) : null;
+if (process.env.VITE_ENABLE_DEMO !== 'true') {
+  registerWhatsApp(app, databasePool);
+  app.use('/api/gemini/parse-expense', (_req, res) => res.status(410).json({error:'La interpretación real se utiliza únicamente desde el webhook firmado.'}));
+} else {
+  app.use('/api/whatsapp/webhook', (_req,res) => res.status(410).json({error:'El webhook real está deshabilitado en modo demo.'}));
+}
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // Configuración en memoria para el bot de WhatsApp Meta
 let whatsappConfig = {
-  verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || 'gastos_familia_meta_2026',
+  verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
   phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
   accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
   businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
@@ -105,44 +119,19 @@ async function parseExpenseWithGemini(
   }
 ) {
   const ai = getGeminiClient();
-  const currentDate = new Date().toISOString().split('T')[0];
+  const currentDate = todayDateOnly();
 
   const systemInstruction = `
 Eres el asistente financiero oficial para una familia. Tu tarea es analizar mensajes de WhatsApp (texto coloquial, audios transcriptos o tickets de compra) y extraer datos estructurados del gasto para registrarlo de manera ordenada.
 Fecha de referencia hoy: ${currentDate}.
 Si el mensaje menciona cuotas (ej. "en 3 cuotas", "en 6 pagos"), extrae installmentTotal y calcula la primera cuota.
-Si no especifica método de pago pero menciona tarjetas, detecta si es crédito o débito.
+No inventes monto, tarjeta, categoría ni medio de pago. Omite campos desconocidos y no confirmes un registro si faltan datos.
 Si no menciona si es gasto compartido o individual, evalúa por la naturaleza del gasto: compras de supermercado, cuentas, colegio, luz, gas son normalmente compartidos (isShared: true). Ocio personal, ropa personal son isShared: false.
-Genera un 'replyText' en español argentino/latinoamericano muy amable, claro y con emojis confirmando los detalles principales del gasto.
+Genera un 'replyText' en español que resuma los datos extraídos para revisión, sin afirmar que ya se registró el gasto.
 `;
 
   if (!ai) {
-    // Fallback inteligente heurístico si aún no hay clave o modo sin conexión
-    const raw = (input.message || '').trim();
-    const amountMatch = raw.match(/\$?\s*([\d.]+([,.]\d{1,2})?)/);
-    const amount = amountMatch ? parseFloat(amountMatch[1].replace(/\./g, '').replace(',', '.')) : 1000;
-    const isCuotas = raw.toLowerCase().match(/(\d+)\s*(cuotas?|pagos?)/);
-    const installmentTotal = isCuotas ? parseInt(isCuotas[1], 10) : 1;
-
-    return {
-      description: raw.slice(0, 40) || 'Gasto registrado por WhatsApp',
-      amount: amount || 5000,
-      currency: 'ARS',
-      category: raw.toLowerCase().includes('super') || raw.toLowerCase().includes('coto') || raw.toLowerCase().includes('carrefour')
-        ? 'Supermercado'
-        : raw.toLowerCase().includes('nafta') || raw.toLowerCase().includes('combustible')
-        ? 'Transporte & Combustible'
-        : raw.toLowerCase().includes('luz') || raw.toLowerCase().includes('gas') || raw.toLowerCase().includes('internet')
-        ? 'Servicios & Hogar'
-        : 'Alimentación & Salidas',
-      paymentMethod: installmentTotal > 1 ? 'Tarjeta de Crédito' : 'Billetera Virtual',
-      isShared: true,
-      installmentTotal,
-      installmentCurrent: 1,
-      cardName: raw.toLowerCase().includes('visa') ? 'Visa' : raw.toLowerCase().includes('master') ? 'Mastercard' : undefined,
-      confidenceScore: 0.85,
-      replyText: `✅ Registrado: $${amount.toLocaleString('es-AR')} en ${raw.slice(0, 30) || 'Gasto general'}${installmentTotal > 1 ? ` (${installmentTotal} cuotas)` : ''}.`,
-    };
+    throw new Error('Gemini no está configurado. Completa el gasto manualmente; no se generaron datos de prueba.');
   }
 
   const promptContent: any[] = [];
@@ -159,7 +148,7 @@ Genera un 'replyText' en español argentino/latinoamericano muy amable, claro y 
   const userPrompt = `
 Mensaje recibido: "${input.message || 'Ticket adjunto'}"
 Miembro de la familia: ${input.memberName || 'Familiar'}
-Tarjetas conocidas de la familia: ${input.knownCards?.join(', ') || 'Visa Santander, Mastercard Galicia'}
+Tarjetas conocidas de la familia: ${input.knownCards?.join(', ') || 'No informadas; no asumir ninguna'}
 
 Extrae el gasto respetando el esquema JSON.
 `;
@@ -189,31 +178,12 @@ Extrae el gasto respetando el esquema JSON.
           category: {
             type: Type.STRING,
             description: 'Categoría exacta sugerida',
-            enum: [
-              'Supermercado',
-              'Alimentación & Salidas',
-              'Servicios & Hogar',
-              'Transporte & Combustible',
-              'Salud & Farmacia',
-              'Educación',
-              'Ocio & Entretenimiento',
-              'Ropa & Cuidado Personal',
-              'Tecnología & Equipamiento',
-              'Mascotas',
-              'Impuestos & Seguros',
-              'Otros',
-            ],
+            enum: [...EXPENSE_CATEGORIES],
           },
           paymentMethod: {
             type: Type.STRING,
             description: 'Método de pago detectado',
-            enum: [
-              'Tarjeta de Crédito',
-              'Tarjeta de Débito',
-              'Efectivo',
-              'Transferencia',
-              'Billetera Virtual',
-            ],
+            enum: [...PAYMENT_METHODS],
           },
           isShared: {
             type: Type.BOOLEAN,
@@ -240,17 +210,7 @@ Extrae el gasto respetando el esquema JSON.
             description: 'Respuesta amable en español confirmando el registro con emojis',
           },
         },
-        required: [
-          'description',
-          'amount',
-          'currency',
-          'category',
-          'paymentMethod',
-          'isShared',
-          'installmentTotal',
-          'installmentCurrent',
-          'replyText',
-        ],
+        required: ['replyText'],
       },
     },
   });
@@ -280,10 +240,9 @@ app.post('/api/gemini/parse-expense', async (req: Request, res: Response) => {
 
     res.json({ success: true, data: result });
   } catch (error) {
-    console.error('Error parseando gasto con Gemini:', error);
+    console.error('Error parseando gasto con Gemini:');
     res.status(500).json({
       error: 'Error al interpretar el gasto con inteligencia artificial',
-      details: error instanceof Error ? error.message : String(error),
     });
   }
 });
@@ -295,7 +254,7 @@ app.get('/api/whatsapp/webhook', (req: Request, res: Response) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === whatsappConfig.verifyToken) {
+  if (mode === 'subscribe' && whatsappConfig.verifyToken && token === whatsappConfig.verifyToken) {
     console.log('✅ Webhook de Meta WhatsApp verificado exitosamente!');
     return res.status(200).send(challenge);
   }
@@ -326,12 +285,12 @@ app.post('/api/whatsapp/webhook', async (req: Request, res: Response) => {
               if (message.type === 'text') {
                 textContent = message.text.body;
               } else if (message.type === 'audio') {
-                textContent = 'Nota de voz recibida (Audio de WhatsApp)';
+                continue;
               } else if (message.type === 'image') {
-                textContent = message.image.caption || 'Foto de ticket/factura recibida';
+                continue;
               }
 
-              console.log(`📩 Mensaje entrante de WhatsApp [${from}]: ${textContent}`);
+              console.log('whatsapp: demo_message');
 
               // Procesar con Gemini
               try {
@@ -358,7 +317,7 @@ app.post('/api/whatsapp/webhook', async (req: Request, res: Response) => {
                   await sendWhatsAppMessage(from, extracted.replyText);
                 }
               } catch (parseErr) {
-                console.error('Error procesando mensaje de WhatsApp con Gemini:', parseErr);
+                console.error('Error procesando mensaje de WhatsApp con Gemini:');
               }
             }
           }
@@ -366,7 +325,7 @@ app.post('/api/whatsapp/webhook', async (req: Request, res: Response) => {
       }
     }
   } catch (error) {
-    console.error('Error procesando webhook de WhatsApp:', error);
+    console.error('Error procesando webhook de WhatsApp:');
   }
 });
 
@@ -393,9 +352,9 @@ async function sendWhatsAppMessage(to: string, message: string) {
       }),
     });
     const data = await response.json();
-    console.log('Respuesta de Meta WhatsApp API:', data);
+    console.log('whatsapp: demo_reply_attempt');
   } catch (err) {
-    console.error('Error enviando mensaje a Meta WhatsApp API:', err);
+    console.error('Error enviando mensaje a Meta WhatsApp API:');
   }
 }
 
@@ -435,10 +394,9 @@ app.post('/api/whatsapp/simulate', async (req: Request, res: Response) => {
       replyMessage: extracted.replyText,
     });
   } catch (err) {
-    console.error('Error simulando WhatsApp:', err);
+    console.error('Error simulando WhatsApp:');
     res.status(500).json({
       error: 'Error en la simulación de WhatsApp',
-      details: err instanceof Error ? err.message : String(err),
     });
   }
 });
@@ -446,7 +404,7 @@ app.post('/api/whatsapp/simulate', async (req: Request, res: Response) => {
 // 5. Consulta y guardado de configuración de WhatsApp Meta
 app.get('/api/whatsapp/config', (_req: Request, res: Response) => {
   res.json({
-    verifyToken: whatsappConfig.verifyToken,
+    verifyToken: '',
     phoneNumberId: whatsappConfig.phoneNumberId ? '••••••••' + whatsappConfig.phoneNumberId.slice(-4) : '',
     hasAccessToken: !!whatsappConfig.accessToken,
     businessAccountId: whatsappConfig.businessAccountId || '',
@@ -469,6 +427,9 @@ app.get('/api/whatsapp/logs', (_req: Request, res: Response) => {
   res.json({ logs: whatsappLogs });
 });
 
+
+registerDatabaseApi(app, databasePool);
+
 // ================= VITE DEV MIDDLEWARE & SERVIDO ESTÁTICO =================
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -478,9 +439,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.use(express.static(path.resolve(__dirname, process.env.FRONTEND_DIST_DIR || 'dist')));
     app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, 'dist/index.html'));
+      res.sendFile(path.resolve(__dirname, process.env.FRONTEND_DIST_DIR || 'dist', 'index.html'));
     });
   }
 

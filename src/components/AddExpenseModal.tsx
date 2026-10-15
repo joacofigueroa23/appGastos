@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import { ManualExpenseForm } from './ManualExpenseForm';
+import React, { useState, useEffect } from 'react';
 import { useFinance } from '../context/FinanceContext';
-import { ExpenseCategory, PaymentMethod } from '../types';
+import { EXPENSE_CATEGORIES as CATEGORIES, PAYMENT_METHODS } from '../data/financeCatalog';
+import { manualExpenseFromFields, selectableCards, todayDateOnly } from '../utils/finance';
 import {
   X,
   Sparkles,
@@ -16,34 +18,11 @@ interface AddExpenseModalProps {
   onClose: () => void;
 }
 
-const CATEGORIES: ExpenseCategory[] = [
-  'Supermercado',
-  'Alimentación & Salidas',
-  'Servicios & Hogar',
-  'Transporte & Combustible',
-  'Salud & Farmacia',
-  'Educación',
-  'Ocio & Entretenimiento',
-  'Ropa & Cuidado Personal',
-  'Tecnología & Equipamiento',
-  'Mascotas',
-  'Impuestos & Seguros',
-  'Otros',
-];
-
-const PAYMENT_METHODS: PaymentMethod[] = [
-  'Tarjeta de Crédito',
-  'Tarjeta de Débito',
-  'Efectivo',
-  'Transferencia',
-  'Billetera Virtual',
-];
-
 export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { members, cards, activeMemberId, addExpense } = useFinance();
+  const { members, cards, activeMemberId, addExpense, isDemoMode } = useFinance();
 
   const [mode, setMode] = useState<'manual' | 'ai'>('manual');
   const [aiText, setAiText] = useState('');
@@ -53,40 +32,47 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   // Formulario manual
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState<string>('');
-  const [category, setCategory] = useState<ExpenseCategory>('Supermercado');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Tarjeta de Débito');
-  const [cardId, setCardId] = useState<string>(cards[0]?.id || '');
+  const [category, setCategory] = useState<string>('');
+  const [paymentMethod, setPaymentMethod] = useState<string>('');
+  const [cardId, setCardId] = useState<string>('');
   const [paidByMemberId, setPaidByMemberId] = useState<string>(activeMemberId);
   const [isShared, setIsShared] = useState<boolean>(true);
   const [installmentTotal, setInstallmentTotal] = useState<number>(1);
   const [installmentCurrent, setInstallmentCurrent] = useState<number>(1);
   const [date, setDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
+    todayDateOnly()
   );
   const [notes, setNotes] = useState('');
 
+  const [formError, setFormError] = useState<string | null>(null);
+  const availableCards = selectableCards(cards);
+  useEffect(() => {
+    if (isOpen) {
+      setPaidByMemberId(activeMemberId);
+      setDate(todayDateOnly());
+      setCategory('');
+      setPaymentMethod('');
+      setCardId('');
+      setMode('manual');
+      setFormError(null);
+    }
+  }, [isOpen, activeMemberId]);
+
   if (!isOpen) return null;
+  if (!isDemoMode) return <ManualExpenseForm onClose={onClose}/>;
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const numAmount = parseFloat(amount.replace(/\./g, '').replace(',', '.'));
-    if (!description.trim() || isNaN(numAmount) || numAmount <= 0) return;
-
-    addExpense({
-      description: description.trim(),
-      amount: numAmount,
-      currency: 'ARS',
-      category,
-      date,
-      paymentMethod,
-      cardId: paymentMethod === 'Tarjeta de Crédito' ? cardId : undefined,
-      paidByMemberId,
-      isShared,
-      installmentTotal: paymentMethod === 'Tarjeta de Crédito' ? installmentTotal : 1,
-      installmentCurrent: paymentMethod === 'Tarjeta de Crédito' ? installmentCurrent : 1,
-      notes: notes.trim() || undefined,
-      source: 'manual',
-    });
+    setFormError(null);
+    try {
+      addExpense(manualExpenseFromFields({
+        description, amount, category, date, paymentMethod, cardId,
+        reportedByMemberId: paidByMemberId, installmentTotal, installmentCurrent, notes,
+      }, availableCards));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'No se pudo guardar el gasto.');
+      return;
+    }
 
     handleClose();
   };
@@ -104,28 +90,34 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         body: JSON.stringify({
           message: aiText,
           memberName: activeMember?.name,
-          knownCards: cards.map((c) => `${c.name} (${c.bank})`),
+          knownCards: availableCards.map((c) => c.name),
         }),
       });
 
       const data = await res.json();
       if (data.success && data.data) {
         const item = data.data;
-        setDescription(item.description || aiText.slice(0, 40));
-        setAmount(String(item.amount || ''));
+        if (item.currency && item.currency !== 'ARS') {
+          setAiFeedback('La carga manual trabaja en ARS. No se convierte automáticamente otra moneda.');
+          return;
+        }
+        setCategory('');
+        setPaymentMethod('');
+        setCardId('');
+        setDescription(item.description || '');
+        setAmount(item.amount == null ? '' : String(item.amount));
         if (item.category && CATEGORIES.includes(item.category)) {
           setCategory(item.category);
         }
         if (item.paymentMethod && PAYMENT_METHODS.includes(item.paymentMethod)) {
           setPaymentMethod(item.paymentMethod);
         }
-        if (item.isShared !== undefined) {
-          setIsShared(item.isShared);
-        }
+        setInstallmentCurrent(item.installmentCurrent ?? 1);
+        if (item.date) setDate(item.date);
         if (item.installmentTotal) {
           setInstallmentTotal(item.installmentTotal);
         }
-        setAiFeedback(item.replyText || '¡Interpretado con éxito! Revisa los campos y confirma.');
+        setAiFeedback('Revisa los datos extraídos y completa los faltantes antes de guardar.');
         setMode('manual');
       } else {
         setAiFeedback('No se pudo extraer la información automáticamente. Por favor completa los campos.');
@@ -144,6 +136,11 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     setAiText('');
     setAiFeedback(null);
     setNotes('');
+    setCategory('');
+    setPaymentMethod('');
+    setCardId('');
+    setIsShared(true);
+    setFormError(null);
     setInstallmentTotal(1);
     setInstallmentCurrent(1);
     onClose();
@@ -161,7 +158,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">Registrar Nuevo Gasto</h3>
-              <p className="text-xs text-slate-500">Agrega movimientos familiares o personales</p>
+              <p className="text-xs text-slate-500">Registra un gasto de la economía familiar</p>
             </div>
           </div>
           <button
@@ -261,6 +258,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         ) : (
           /* Formulario Manual */
           <form onSubmit={handleManualSubmit} className="p-6 space-y-4">
+            {formError && <p role="alert" className="text-sm text-red-700">{formError}</p>}
             
             {aiFeedback && (
               <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
@@ -292,7 +290,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </label>
                 <input
                   type="number"
-                  step="any"
+                  step="0.01"
+                  min="0.01"
                   required
                   placeholder="0"
                   value={amount}
@@ -325,9 +324,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </label>
                 <select
                   value={category}
-                  onChange={(e) => setCategory(e.target.value as ExpenseCategory)}
+                  required
+                  aria-label="Categoría"
+                  onChange={(e) => setCategory(e.target.value)}
                   className="w-full text-sm px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
                 >
+                  <option value="">Selecciona una categoría</option>
                   {CATEGORIES.map((cat) => (
                     <option key={cat} value={cat}>
                       {cat}
@@ -339,10 +341,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               {/* Miembro que pagó */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Pagado por *
+                  Informado por *
                 </label>
                 <select
                   value={paidByMemberId}
+                  required
+                  aria-label="Informado por"
                   onChange={(e) => setPaidByMemberId(e.target.value)}
                   className="w-full text-sm px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
                 >
@@ -361,9 +365,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </label>
                 <select
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                  required
+                  aria-label="Medio de pago"
+                  onChange={(e) => { setPaymentMethod(e.target.value); setCardId(''); }}
                   className="w-full text-sm px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
                 >
+                  <option value="">Selecciona un medio de pago</option>
                   {PAYMENT_METHODS.map((pm) => (
                     <option key={pm} value={pm}>
                       {pm}
@@ -373,19 +380,21 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               </div>
 
               {/* Tarjeta vinculada (si es crédito) */}
-              {paymentMethod === 'Tarjeta de Crédito' && (
+              {(paymentMethod === 'Tarjeta de Crédito' || paymentMethod === 'Tarjeta de Débito') && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Tarjeta de Crédito
+                    Tarjeta (opcional)
                   </label>
                   <select
                     value={cardId}
+                    aria-label="Tarjeta opcional"
                     onChange={(e) => setCardId(e.target.value)}
                     className="w-full text-sm px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
                   >
-                    {cards.map((c) => (
+                    <option value="">Sin tarjeta especificada</option>
+                    {availableCards.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name} ({c.bank} ·····{c.lastDigits})
+                        {c.name}
                       </option>
                     ))}
                   </select>
@@ -401,7 +410,11 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     </label>
                     <select
                       value={installmentTotal}
-                      onChange={(e) => setInstallmentTotal(parseInt(e.target.value, 10))}
+                      onChange={(e) => {
+                        const total = Number(e.target.value);
+                        setInstallmentTotal(total);
+                        setInstallmentCurrent((current) => Math.min(current, total));
+                      }}
                       className="w-full text-sm px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     >
                       {[1, 2, 3, 6, 9, 12, 18, 24].map((n) => (
@@ -432,7 +445,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     <div className="col-span-2 text-xs text-slate-600 pt-1 font-mono">
                       Monto aproximado por cuota:{' '}
                       <strong className="text-slate-900">
-                        ${(parseFloat(amount) / installmentTotal).toLocaleString('es-AR', { maximumFractionDigits: 0 })}
+                        ${(Number(amount) / installmentTotal).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </strong>
                     </div>
                   )}
@@ -440,7 +453,9 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               )}
 
               {/* Destino del gasto: Común o Personal */}
-              <div className="sm:col-span-2 pt-1">
+              <details className="sm:col-span-2 pt-1">
+                <summary className="text-xs text-slate-500">Opciones anteriores: fuera de prioridad actual</summary>
+                <fieldset disabled className="mt-2">
                 <label className="flex items-center gap-2.5 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -457,7 +472,9 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     ? 'Se contabiliza para el presupuesto general de la familia.'
                     : 'Gasto individual propio de quien lo pagó (no se reclama compensación).'}
                 </p>
-              </div>
+                </fieldset>
+                <p className="text-xs text-slate-500">La carga actual pertenece a una única economía familiar.</p>
+              </details>
 
               {/* Notas opcionales */}
               <div className="sm:col-span-2">

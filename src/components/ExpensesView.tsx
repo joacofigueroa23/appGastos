@@ -1,6 +1,10 @@
+import { ManualExpenseForm } from './ManualExpenseForm';
+import {PAYMENT_CODES,PAYMENT_LABELS} from '../shared/apiTypes';
+import type { ApiExpense } from '../shared/apiTypes';
 import React, { useState } from 'react';
 import { useFinance } from '../context/FinanceContext';
-import { ExpenseCategory, PaymentMethod } from '../types';
+import { EXPENSE_CATEGORIES } from '../data/financeCatalog';
+import { totalsByCurrency } from '../utils/finance';
 import {
   Receipt,
   Search,
@@ -18,34 +22,48 @@ interface ExpensesViewProps {
 }
 
 export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) => {
-  const { expenses, members, cards, deleteExpense, formatCurrency } = useFinance();
+  const { expenses, members, cards, deleteExpense, formatCurrency, isDemoMode, apiCards=[], apiExpenses=[], categories=[], loading, error, refresh } = useFinance();
 
+  const [editing,setEditing]=useState<ApiExpense|null>(null);
   const [search, setSearch] = useState('');
   const [selectedMember, setSelectedMember] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedMonth,setSelectedMonth]=useState('');
+  const [selectedPayment,setSelectedPayment]=useState('all');
+  const [selectedCard,setSelectedCard]=useState('all');
+  const [merchant,setMerchant]=useState('');
+  const [deletingId,setDeletingId]=useState<string|null>(null);
   const [selectedType, setSelectedType] = useState<string>('all'); // 'all', 'shared', 'personal', 'installments'
 
   // Filtrado reactivo
   const filteredExpenses = expenses.filter((e) => {
     const matchesSearch =
       e.description.toLowerCase().includes(search.toLowerCase()) ||
+      e.merchant?.toLowerCase().includes(search.toLowerCase()) ||
       (e.notes && e.notes.toLowerCase().includes(search.toLowerCase()));
 
-    const matchesMember = selectedMember === 'all' || e.paidByMemberId === selectedMember;
-    const matchesCategory = selectedCategory === 'all' || e.category === selectedCategory;
+    const matchesMember = selectedMember === 'all' || (e.reportedByMemberId || e.paidByMemberId) === selectedMember;
+    const matchesCategory = selectedCategory === 'all' || (isDemoMode?e.category:e.categoryId) === selectedCategory;
 
     let matchesType = true;
     if (selectedType === 'shared') matchesType = e.isShared;
     if (selectedType === 'personal') matchesType = !e.isShared;
     if (selectedType === 'installments') matchesType = e.installmentTotal > 1;
 
-    return matchesSearch && matchesMember && matchesCategory && matchesType;
+    const matchesManualFilters=isDemoMode||(
+      (!selectedMonth||e.date.slice(0,7)===selectedMonth)&&
+      (selectedPayment==='all'||e.paymentMethod===PAYMENT_LABELS[selectedPayment as keyof typeof PAYMENT_LABELS])&&
+      (selectedCard==='all'||e.cardId===selectedCard)&&
+      (!merchant.trim()||(e.merchant||'').toLowerCase().includes(merchant.trim().toLowerCase()))
+    );
+    return matchesSearch && matchesMember && matchesCategory && matchesType && matchesManualFilters;
   });
 
-  const totalFiltered = filteredExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+  const filteredTotals = totalsByCurrency(filteredExpenses);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Proyección de Cuotas en Meses Futuros
-  const installmentPurchases = expenses.filter((e) => e.installmentTotal > 1);
+  const installmentPurchases = expenses.filter((e) => e.installmentTotal > 1 && e.currency === 'ARS');
 
   // Proyectar para los próximos 4 meses
   const now = new Date();
@@ -60,7 +78,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
   });
 
   installmentPurchases.forEach((e) => {
-    const quotaAmount = Math.round(e.amount / e.installmentTotal);
+    const quotaAmount = Math.round((e.amount * 100) / e.installmentTotal) / 100;
     const quotasLeft = e.installmentTotal - e.installmentCurrent;
 
     futureMonths.forEach((m) => {
@@ -80,15 +98,18 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
   return (
     <div className="space-y-6">
       
+      {loading&&<p role="status">Cargando gastos…</p>}
+      {error&&<p role="alert" className="text-red-700">{error} <button onClick={()=>void refresh?.()}>Reintentar</button></p>}
+      {editing&&<ManualExpenseForm expense={editing} onClose={()=>setEditing(null)}/>}
       {/* Encabezado y Acción */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Receipt className="w-6 h-6 text-blue-600" />
-            <span>Registro Central de Gastos & Cuotas</span>
+            <span>{isDemoMode?'Registro Central de Gastos & Cuotas':'Registro Central de Gastos'}</span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Visualiza todas las transacciones familiares, su origen (WhatsApp o manual) y proyección de cuotas.
+            {isDemoMode?'Visualiza todas las transacciones familiares, su origen (WhatsApp o manual) y proyección de cuotas.':'Gastos de la economía familiar. El integrante identifica quién informó cada gasto.'}
           </p>
         </div>
 
@@ -179,26 +200,26 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
               className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl outline-none bg-white text-slate-700"
             >
               <option value="all">Todas las categorías</option>
-              {[
-                'Supermercado',
-                'Alimentación & Salidas',
-                'Servicios & Hogar',
-                'Transporte & Combustible',
-                'Salud & Farmacia',
-                'Educación',
-                'Ocio & Entretenimiento',
-                'Ropa & Cuidado Personal',
-                'Tecnología & Equipamiento',
-              ].map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
+              {isDemoMode?EXPENSE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>):categories.map(c=><option key={c.id} value={c.id}>{c.name}{c.active?'':' (inactiva)'}</option>)}
             </select>
           </div>
 
-          {/* Filtro por Tipo */}
-          <div>
+          {!isDemoMode&&<>
+            <label className="text-xs text-slate-500">Mes (vacío: todos)
+              <input aria-label="Filtrar por mes" type="month" value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value)} className="w-full px-3 py-2 border rounded-xl"/>
+            </label>
+            <select aria-label="Filtrar por medio de pago" value={selectedPayment} onChange={e=>setSelectedPayment(e.target.value)} className="text-xs px-3 py-2 border rounded-xl">
+              <option value="all">Todos los medios de pago</option>{PAYMENT_CODES.map(code=><option key={code} value={code}>{PAYMENT_LABELS[code]}</option>)}
+            </select>
+            <select aria-label="Filtrar por tarjeta" value={selectedCard} onChange={e=>setSelectedCard(e.target.value)} className="text-xs px-3 py-2 border rounded-xl">
+              <option value="all">Todas las tarjetas</option>{apiCards.map(c=><option key={c.id} value={c.id}>{c.name}{c.active?'':' (inactiva)'}</option>)}
+            </select>
+            <input aria-label="Filtrar por comercio" placeholder="Filtrar por comercio…" maxLength={200} value={merchant} onChange={e=>setMerchant(e.target.value)} className="text-xs px-3 py-2 border rounded-xl"/>
+            <button type="button" onClick={()=>{setSelectedMonth('');setSelectedPayment('all');setSelectedCard('all');setMerchant('');setSelectedMember('all');setSelectedCategory('all');setSearch('');}} className="text-xs text-blue-700">Limpiar filtros</button>
+          </>}
+
+          {/* Filtro por Tipo: conservado para el modo anterior */}
+          {isDemoMode&&<div>
             <select
               aria-label="Filtrar por tipo de gasto"
               value={selectedType}
@@ -210,7 +231,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
               <option value="personal">Solo Personales</option>
               <option value="installments">Solo en Cuotas</option>
             </select>
-          </div>
+          </div>}
 
         </div>
 
@@ -222,23 +243,26 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
           <span>
             Total filtrado:{' '}
             <strong className="text-slate-900 font-mono text-sm">
-              {formatCurrency(totalFiltered)}
+              {filteredTotals.length ? filteredTotals.map(([currency, total]) =>
+                currency + ': ' + formatCurrency(total, currency)).join(' · ') : formatCurrency(0)}
             </strong>
           </span>
         </div>
       </div>
 
+      {deleteError && <p role="alert" className="text-sm text-red-700">{deleteError}</p>}
       {/* Tabla / Lista de Gastos */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="divide-y divide-slate-100">
           
           {filteredExpenses.map((expense) => {
-            const member = members.find((m) => m.id === expense.paidByMemberId);
-            const card = cards.find((c) => c.id === expense.cardId);
+            const member = members.find((m) => m.id === (expense.reportedByMemberId || expense.paidByMemberId));
+            const card = (isDemoMode?cards:apiCards).find((c) => c.id === expense.cardId);
 
             return (
               <div
                 key={expense.id}
+                data-expense-id={expense.id}
                 className="p-4 hover:bg-slate-50/70 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
               >
                 
@@ -259,7 +283,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                       <p className="text-sm font-bold text-slate-900 truncate">
                         {expense.description}
                       </p>
-                      {expense.isShared ? (
+                      {isDemoMode && (expense.isShared ? (
                         <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md shrink-0">
                           Común
                         </span>
@@ -267,11 +291,12 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                         <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md shrink-0">
                           Personal
                         </span>
-                      )}
+                      ))}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <span>{expense.date}</span>
+                      {expense.merchant&&<span>· {expense.merchant}</span>}
                       <span>·</span>
                       <span className="font-medium text-slate-700">{expense.category}</span>
                       <span>·</span>
@@ -279,7 +304,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                       {card && <span>({card.name})</span>}
                       <span>·</span>
                       <span className="font-semibold text-slate-800">
-                        {member?.avatar} {member?.name || 'Familiar'}
+                        {member?.avatar} {member?.name || (isDemoMode?'Familiar':'Sin integrante especificado')}
                       </span>
                     </div>
 
@@ -288,7 +313,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                         <CreditCard className="w-3.5 h-3.5" />
                         <span>
                           Cuota {expense.installmentCurrent} de {expense.installmentTotal} (
-                          {formatCurrency(Math.round(expense.amount / expense.installmentTotal))} por cuota)
+                          {formatCurrency(expense.amount / expense.installmentTotal, expense.currency)} por cuota)
                         </span>
                       </div>
                     )}
@@ -305,16 +330,25 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                 <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pl-13 sm:pl-0">
                   <div className="text-right">
                     <span className="text-base font-bold font-mono text-slate-900 block tabular-nums">
-                      {formatCurrency(expense.amount)}
+                      {formatCurrency(expense.amount, expense.currency)}
                     </span>
                     <span className="text-[11px] text-slate-400 uppercase">
                       {expense.source === 'whatsapp' ? 'Vía WhatsApp Bot' : 'Manual'}
                     </span>
                   </div>
 
+                  {!isDemoMode&&<button onClick={()=>setEditing(apiExpenses.find(e=>e.id===expense.id)||null)} className="text-xs text-blue-700">Editar gasto</button>}
                   <button
-                    onClick={() => deleteExpense(expense.id)}
+                    disabled={deletingId!==null||loading}
+                    onClick={async () => {
+                      if(deletingId)return;
+                      setDeletingId(expense.id);setDeleteError(null);
+                      try { await deleteExpense(expense.id); }
+                      catch (error) { setDeleteError(error instanceof Error ? error.message : 'No se pudo eliminar.'); }
+                      finally { setDeletingId(null); }
+                    }}
                     className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                    aria-label={'Eliminar gasto '+expense.description}
                     title="Eliminar gasto"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -325,7 +359,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
             );
           })}
 
-          {filteredExpenses.length === 0 && (
+          {!loading&&!error&&filteredExpenses.length === 0 && (
             <div className="py-12 text-center text-slate-500 space-y-2">
               <p className="text-sm font-semibold">No se encontraron gastos con los filtros seleccionados.</p>
               <button

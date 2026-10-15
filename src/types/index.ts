@@ -1,3 +1,5 @@
+import { EXPENSE_CATEGORIES, PAYMENT_METHODS } from '../data/financeCatalog';
+
 export type MemberRole = 'admin' | 'member' | 'teen';
 
 export interface FamilyMember {
@@ -10,37 +12,23 @@ export interface FamilyMember {
   monthlyBudget: number;
 }
 
-export type ExpenseCategory =
-  | 'Supermercado'
-  | 'Alimentación & Salidas'
-  | 'Servicios & Hogar'
-  | 'Transporte & Combustible'
-  | 'Salud & Farmacia'
-  | 'Educación'
-  | 'Ocio & Entretenimiento'
-  | 'Ropa & Cuidado Personal'
-  | 'Tecnología & Equipamiento'
-  | 'Mascotas'
-  | 'Impuestos & Seguros'
-  | 'Otros';
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
-export type PaymentMethod =
-  | 'Tarjeta de Crédito'
-  | 'Tarjeta de Débito'
-  | 'Efectivo'
-  | 'Transferencia'
-  | 'Billetera Virtual';
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number] | 'Otro';
 
 export interface Expense {
   id: string;
   description: string;
   amount: number;
   currency: string;
-  category: ExpenseCategory;
+  category: string;
+  categoryId?: string;
+  merchant?: string;
   date: string; // YYYY-MM-DD
   paymentMethod: PaymentMethod;
   cardId?: string;
-  paidByMemberId: string;
+  paidByMemberId: string; // Compatibilidad con vistas anteriores.
+  reportedByMemberId?: string; // Quién cargó o informó el gasto.
   isShared: boolean; // true = gasto común del hogar, false = personal
   installmentTotal: number; // 1 = contado / 1 pago
   installmentCurrent: number; // 1, 2, ...
@@ -50,9 +38,16 @@ export interface Expense {
   createdAt: string;
 }
 
+export interface CardIdentity {
+  id: string;
+  name: string;
+  active: boolean;
+}
+// Los campos bancarios anteriores permanecen para calendario y vistas existentes.
 export interface CreditCard {
   id: string;
   name: string;
+  active?: boolean; // Los registros antiguos sin el campo se consideran activos.
   bank: string;
   lastDigits: string;
   closingDay: number; // Día del mes (1-31)

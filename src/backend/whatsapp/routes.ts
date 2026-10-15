@@ -1,0 +1,69 @@
+
+import express,{type Express} from 'express';
+import type {Pool} from 'pg';
+import {resolveFamilyId} from '../expenses/service';
+import {normalizePhone,validSignature} from './security';
+import {enqueue,type IncomingMessage} from './repository';
+import {geminiInterpreter,type Interpreter} from './interpretation';
+import {metaSender,type ReplySender} from './transport';
+import {whatsappProcessor} from './processor';
+export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean}
+export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOptions={}){
+ const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender()):null;
+ const configured=!!((options.secret??process.env.WHATSAPP_APP_SECRET)&&(options.phoneNumberId??process.env.WHATSAPP_PHONE_NUMBER_ID));
+ const stop=options.startWorker===false||!configured?()=>{}:processor?.start()||(()=>{});
+ app.get('/api/whatsapp/webhook',(req,res)=>{
+  const token=options.verifyToken??process.env.WHATSAPP_VERIFY_TOKEN;
+  if(token&&req.query['hub.mode']==='subscribe'&&req.query['hub.verify_token']===token&&typeof req.query['hub.challenge']==='string')return void res.status(200).send(req.query['hub.challenge']);
+  res.status(403).json({error:'Verificación rechazada.'});
+ });
+ app.post('/api/whatsapp/webhook',express.raw({type:'application/json',limit:'256kb'}),async(req,res)=>{
+  const secret=options.secret??process.env.WHATSAPP_APP_SECRET;
+  if(!secret)return void res.status(503).json({error:'Webhook no configurado.'});
+  if(!Buffer.isBuffer(req.body)||!validSignature(req.body,req.get('X-Hub-Signature-256'),secret))return void res.status(403).json({error:'Firma inválida.'});
+  if(!pool)return void res.status(503).json({error:'Persistencia no disponible.'});
+  const phoneId=options.phoneNumberId??process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if(!phoneId||(!options.send&&!process.env.WHATSAPP_ACCESS_TOKEN))return void res.status(503).json({error:'Envío WhatsApp no configurado.'});
+  let body:any;
+  try{body=JSON.parse(req.body.toString('utf8'));}catch{return void res.status(400).json({error:'JSON inválido.'});}
+  if(body?.object!=='whatsapp_business_account'||!Array.isArray(body.entry))return void res.status(400).json({error:'Evento inválido.'});
+  const messages:IncomingMessage[]=[];
+  try{
+   for(const entry of body.entry){
+    if(!Array.isArray(entry.changes))throw new Error();
+    for(const change of entry.changes){
+     if(change.field!=='messages')continue;
+     const value=change.value;
+     if(value?.metadata?.phone_number_id!==phoneId)continue;
+     if(value.messages===undefined)continue;
+     if(!Array.isArray(value.messages))throw new Error();
+     for(const m of value.messages){
+      const sender=normalizePhone(m.from);
+      if(!sender||typeof m.id!=='string'||!m.id||m.id.length>256||typeof m.type!=='string'||m.type.length>40)throw new Error();
+      if(m.type==='text'&&(typeof m.text?.body!=='string'||!m.text.body.trim()||m.text.body.length>4096))throw new Error();
+      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date()});
+      if(messages.length>100)throw new Error();
+     }
+    }
+   }
+  }catch{return void res.status(400).json({error:'Mensaje inválido.'});}
+  try{
+   if(messages.length)await enqueue(pool,options.familyId||await resolveFamilyId(pool),messages);
+   res.status(200).send('EVENT_RECEIVED');
+   if(options.startWorker!==false)setImmediate(()=>void processor?.drain());
+  }catch{console.warn('whatsapp: receipt_failed');res.status(503).json({error:'No se pudo persistir la recepción; reintenta.'});}
+ });
+ app.use('/api/whatsapp/webhook',((error, _req, res, _next)=>{
+  res.status(error?.status===413?413:400).json({error:'Cuerpo del webhook inválido o demasiado grande.'});
+ }) as express.ErrorRequestHandler);
+ app.get('/api/whatsapp/config',(_req,res)=>res.json({
+  verifyToken:'',phoneNumberId:process.env.WHATSAPP_PHONE_NUMBER_ID?'••••'+process.env.WHATSAPP_PHONE_NUMBER_ID.slice(-4):'',
+  hasAccessToken:!!process.env.WHATSAPP_ACCESS_TOKEN,hasAppSecret:!!process.env.WHATSAPP_APP_SECRET,
+  hasVerifyToken:!!process.env.WHATSAPP_VERIFY_TOKEN,
+  webhookUrl:(process.env.APP_URL||'')+'/api/whatsapp/webhook',
+ }));
+ app.post('/api/whatsapp/config',(_req,res)=>res.status(403).json({error:'Configura WhatsApp exclusivamente mediante variables del servidor.'}));
+ app.get('/api/whatsapp/logs',(_req,res)=>res.json({logs:[]}));
+ app.use('/api/whatsapp',(_req,res)=>res.status(410).json({error:'Simulador anterior preservado en modo demo; no registra gastos reales.'}));
+ return {processor,stop};
+}

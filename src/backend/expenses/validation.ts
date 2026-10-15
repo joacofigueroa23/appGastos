@@ -1,0 +1,71 @@
+import { PAYMENT_CODES, type ExpenseWrite } from '../../shared/apiTypes';
+import { isDateOnly } from '../../utils/finance';
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+export function uuid(value: unknown, field = 'id'): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new ApiError(400, field + ' debe ser un UUID.');
+  }
+  return value;
+}
+export function text(value: unknown, field: string, max: number): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > max) {
+    throw new ApiError(400, field + ' es obligatorio y debe tener hasta ' + max + ' caracteres.');
+  }
+  return value.trim();
+}
+export function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ApiError(400, 'Se requiere un objeto JSON.');
+  return value as Record<string, unknown>;
+}
+export function normalizeAmount(value: unknown): string {
+  if (typeof value !== 'string' && typeof value !== 'number') throw new ApiError(400, 'Monto inválido.');
+  const raw = String(value);
+  if (!/^\d{1,12}(?:\.\d{1,2})?$/.test(raw)) throw new ApiError(400, 'El monto debe ser positivo y tener hasta dos decimales.');
+  const [whole, decimals = ''] = raw.split('.');
+  if (BigInt(whole) * 100n + BigInt(decimals.padEnd(2, '0')) <= 0n) throw new ApiError(400, 'El monto debe ser mayor a cero.');
+  return whole + '.' + decimals.padEnd(2, '0');
+}
+const fields = ['date','amount','currency','merchant','description','categoryId','paymentMethod','cardId','reportedByMemberId'];
+export function validateExpenseWrite(value: unknown, previous?: ExpenseWrite): ExpenseWrite {
+  const body = object(value);
+  if (!Object.keys(body).length) throw new ApiError(400, 'No hay cambios.');
+  for (const key of Object.keys(body)) if (!fields.includes(key)) throw new ApiError(400, 'Campo no permitido: ' + key);
+  const input = { ...previous, ...body };
+  if (typeof input.date !== 'string' || !isDateOnly(input.date)) throw new ApiError(400, 'Fecha inválida: usa YYYY-MM-DD.');
+  if (typeof input.currency !== 'string' || !/^[A-Z]{3}$/.test(input.currency)) throw new ApiError(400, 'Moneda inválida.');
+  if (!(PAYMENT_CODES as readonly unknown[]).includes(input.paymentMethod)) throw new ApiError(400, 'Medio de pago inválido.');
+  const cardId = input.cardId == null ? null : uuid(input.cardId, 'cardId');
+  if (cardId && !['debit_card','credit_card'].includes(input.paymentMethod as string)) throw new ApiError(400, 'La tarjeta requiere pago con crédito o débito.');
+  return {
+    date: input.date, amount: normalizeAmount(input.amount), currency: input.currency,
+    merchant: input.merchant == null ? null : text(input.merchant, 'merchant', 200),
+    description: text(input.description, 'description', 1000),
+    categoryId: uuid(input.categoryId, 'categoryId'),
+    paymentMethod: input.paymentMethod as ExpenseWrite['paymentMethod'], cardId,
+    reportedByMemberId: input.reportedByMemberId == null ? null : uuid(input.reportedByMemberId, 'reportedByMemberId'),
+  };
+}
+
+export function validateExpenseFilters(value:unknown):import('../../shared/apiTypes').ExpenseFilters {
+ const query=object(value);
+ const fields=['month','currency','categoryId','paymentMethod','cardId','reportedByMemberId','merchant'];
+ if(Object.keys(query).some(k=>!fields.includes(k)))throw new ApiError(400,'Filtro no permitido.');
+ const out:import('../../shared/apiTypes').ExpenseFilters={};
+ if(query.month!==undefined){
+  if(typeof query.month!=='string'||!isDateOnly(query.month+'-01'))throw new ApiError(400,'Mes inválido.');
+  out.month=query.month;
+ }
+ if(query.currency!==undefined){
+  if(typeof query.currency!=='string'||!(/^[A-Z]{3}$/).test(query.currency))throw new ApiError(400,'Moneda inválida.');
+  out.currency=query.currency;
+ }
+ for(const field of ['categoryId','cardId','reportedByMemberId'] as const)if(query[field]!==undefined)out[field]=uuid(query[field],field);
+ if(query.paymentMethod!==undefined){
+  if(!(PAYMENT_CODES as readonly unknown[]).includes(query.paymentMethod))throw new ApiError(400,'Medio de pago inválido.');
+  out.paymentMethod=query.paymentMethod as import('../../shared/apiTypes').PaymentCode;
+ }
+ if(query.merchant!==undefined)out.merchant=text(query.merchant,'merchant',200);
+ return out;
+}

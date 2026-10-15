@@ -1,4 +1,6 @@
+import { DatabaseDashboard } from './DatabaseDashboard';
 import React from 'react';
+import { dateOnlyDayDifference, sumAmounts, todayDateOnly, totalsByCategory } from '../utils/finance';
 import { useFinance } from '../context/FinanceContext';
 import {
   TrendingUp,
@@ -23,8 +25,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenAddExpense,
 }) => {
   const {
+    isDemoMode,
     members,
     expenses,
+    currentMonthExpenses,
     bills,
     cards,
     formatCurrency,
@@ -32,7 +36,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     toggleBillPaid,
   } = useFinance();
 
+  if (!isDemoMode) return <DatabaseDashboard onOpenAddExpense={onOpenAddExpense}/>;
+
   const now = new Date();
+  const currentMonth = todayDateOnly(now).slice(0, 7);
   const currentMonthName = now.toLocaleString('es-AR', { month: 'long', year: 'numeric' });
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const daysRemaining = daysInMonth - now.getDate();
@@ -44,22 +51,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 
   // Cuotas activas
-  const installmentExpenses = expenses.filter((e) => e.installmentTotal > 1);
-  const totalInstallmentBurden = installmentExpenses.reduce((acc, e) => {
-    return acc + Math.round(e.amount / e.installmentTotal);
-  }, 0);
+  const installmentExpenses = currentMonthExpenses.filter((e) => e.installmentTotal > 1);
+  const totalInstallmentBurden = sumAmounts(installmentExpenses.map((e) => ({
+    amount: Math.round((e.amount * 100) / e.installmentTotal) / 100,
+  })));
 
   // Próximos vencimientos ordenados
   const pendingBillsSorted = [...bills]
-    .filter((b) => b.status === 'pending')
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+    .filter((b) => b.status === 'pending' && b.dueDate.slice(0, 7) === currentMonth)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
   // Desglose por categoría
-  const categoryTotals: Record<string, number> = {};
-  expenses.forEach((e) => {
-    categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
-  });
-  const sortedCategories = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1]);
+  const sortedCategories = totalsByCategory(currentMonthExpenses);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -85,7 +88,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-800 text-xs font-semibold rounded-2xl border border-emerald-200/70">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <MessageCircle className="w-4 h-4 text-emerald-600" />
-            <span>WhatsApp Conectado: +54 9 11 3840-9123</span>
+            <span>WhatsApp conectar</span>
           </div>
 
           <button
@@ -97,6 +100,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       </div>
+
+      {expenses.some((e) => e.currency !== 'ARS') && (
+        <p className="text-xs text-slate-600">Este panel incluye únicamente ARS. Otras monedas se conservan en el historial.</p>
+      )}
 
       {/* 2. Cuadrícula de 4 Métricas Clave (Sin saturación visual) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -135,7 +142,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Métrica 3: Vencimientos Pendientes */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
-          <span className="text-xs font-semibold text-slate-500 block">Facturas & Vencimientos</span>
+          <span className="text-xs font-semibold text-slate-500 block">Facturas del mes (ARS)</span>
           <div className="text-2xl font-extrabold font-mono text-amber-600 tracking-tight tabular-nums">
             {formatCurrency(currentMonthSummary.totalPendingBills)}
           </div>
@@ -152,7 +159,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Métrica 4: Cuotas Fijas Activas */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
-          <span className="text-xs font-semibold text-slate-500 block">Compromiso en Cuotas</span>
+          <span className="text-xs font-semibold text-slate-500 block">Cuota estimada de compras del mes (ARS)</span>
           <div className="text-2xl font-extrabold font-mono text-purple-600 tracking-tight tabular-nums">
             {formatCurrency(totalInstallmentBurden)}
           </div>
@@ -192,10 +199,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="divide-y divide-slate-100">
             {pendingBillsSorted.slice(0, 4).map((bill) => {
-              const due = new Date(bill.dueDate);
-              const diffDays = Math.ceil(
-                (due.getTime() - now.getTime()) / (1000 * 3600 * 24)
-              );
+              const diffDays = dateOnlyDayDifference(bill.dueDate, todayDateOnly(now));
               const isUrgent = diffDays <= 3;
               const isWarning = diffDays <= 7;
 
@@ -220,7 +224,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </p>
                       <p className="text-[11px] text-slate-400">
                         Vence: {bill.dueDate}{' '}
-                        {diffDays <= 0 ? (
+                        {diffDays < 0 ? (
+                          <strong className="text-red-600">· Vencida</strong>
+                        ) : diffDays === 0 ? (
                           <strong className="text-red-600">· ¡Vence hoy!</strong>
                         ) : (
                           <span>· en {diffDays} días</span>
@@ -316,12 +322,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* Presupuesto por Miembro Familiar */}
           <div className="pt-3 border-t border-slate-100 space-y-2">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-              Participación Familiar
+              Gastos informados por integrante este mes
             </span>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {members.map((m) => {
-                const memExpenses = expenses.filter((e) => e.paidByMemberId === m.id);
-                const memTotal = memExpenses.reduce((acc, e) => acc + e.amount, 0);
+                const memExpenses = currentMonthExpenses.filter((e) => (e.reportedByMemberId || e.paidByMemberId) === m.id);
+                const memTotal = sumAmounts(memExpenses);
                 return (
                   <div key={m.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/60 text-center space-y-1">
                     <span className="text-base select-none">{m.avatar}</span>
