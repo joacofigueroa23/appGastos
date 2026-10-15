@@ -1,0 +1,68 @@
+import type {PaymentCode} from '../../shared/apiTypes';
+import {eligibleCards,type CardEntry,type CatalogEntry} from './candidate';
+import type {DraftField,ExpenseDraft} from './draft';
+
+// Plantillas deterministas de WhatsApp. Sin IA generativa.
+
+// Monto con formato argentino: $35.000, $1.234,56; otra moneda con prefijo explícito (US$ 100, EUR 50).
+export function formatAmount(amount:string,currency:string,familyCurrency:string):string{
+ const [whole,decimals='00']=amount.split('.');
+ const grouped=whole.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+ const n=/^0*$/.test(decimals)?grouped:grouped+','+decimals.padEnd(2,'0');
+ return currency===familyCurrency?'$'+n:currency==='USD'?'US$ '+n:currency+' '+n;
+}
+
+export interface Question {text:string;options?:(string|null)[]}
+const numbered=(names:string[])=>names.map((name,i)=>(i+1)+') '+name).join('  ');
+// Pregunta para el primer campo faltante. Las listas guardan los ids en el orden mostrado.
+export function questionFor(field:DraftField,draft:ExpenseDraft,catalog:{categories:CatalogEntry[];cards:CardEntry[]}):Question{
+ switch(field){
+  case 'amount':return {text:'¿Cuánto gastaste?'};
+  case 'paymentMethod':return {text:'¿Cómo pagaste? Efectivo, débito, crédito, transferencia o billetera virtual.'};
+  case 'card':{
+   const method=draft.paymentMethod?.value;
+   const cards=method?eligibleCards(catalog.cards,method as PaymentCode):[];
+   return {text:'¿Con qué tarjeta? '+numbered([...cards.map(c=>c.name),'Ninguna']),options:[...cards.map(c=>c.id),null]};
+  }
+  case 'category':{
+   const categories=catalog.categories.filter(c=>c.active).sort((a,b)=>a.name.localeCompare(b.name,'es'));
+   return {text:'¿En qué categoría lo cargo? '+numbered(categories.map(c=>c.name)),options:categories.map(c=>c.id)};
+  }
+  case 'date':return {text:'¿Qué día fue? (ej. hoy, ayer, 12/10)'};
+ }
+}
+
+export function confirmation(input:{amount:string;currency:string;familyCurrency:string;merchant:string|null;categoryName:string;cardName:string|null}):string{
+ const where=input.merchant?input.merchant+' · '+input.categoryName:input.categoryName;
+ return '✅ Registrado: '+formatAmount(input.amount,input.currency,input.familyCurrency)+' en '+where+(input.cardName?' · '+input.cardName:'')+'.';
+}
+// Resumen breve del borrador para el aviso de gasto pendiente.
+export function draftSummary(draft:ExpenseDraft,catalog:{categories:CatalogEntry[]},familyCurrency:string):string{
+ const parts:string[]=[];
+ if(draft.amount)parts.push(formatAmount(draft.amount.value,draft.currency?.value??familyCurrency,familyCurrency));
+ const category=draft.category?catalog.categories.find(c=>c.id===draft.category!.value)?.name:null;
+ if(draft.merchant)parts.push('en '+draft.merchant.value);else if(category)parts.push('en '+category);
+ return parts.length?parts.join(' '):'sin datos todavía';
+}
+// Errores de campo convertidos en un aviso previo a la pregunta.
+export function fieldNotice(errors:string[]):string{
+ return errors.length?'No pude tomar: '+[...new Set(errors)].join('; ')+'. ':'';
+}
+
+export const REPLIES={
+ cancelled:'Listo, cancelé el gasto pendiente. No se registró nada.',
+ nothingToCancel:'No tenés ningún gasto pendiente para cancelar.',
+ conflict:(summary:string)=>'Tenés un gasto pendiente ('+summary+'). Respondé la pregunta o escribí "cancelar" para empezar otro.',
+ unknown:'No entendí la respuesta. ',
+ tooManyUnknown:'No pude entender las respuestas, así que cancelé el gasto pendiente. No se registró nada. Podés empezar de nuevo cuando quieras.',
+ corrected:'Corregido. ',
+ help:'Para registrar un gasto contame cuánto gastaste, dónde y cómo pagaste. Ej: "Gasté 35 mil en Carrefour con débito".',
+ notInterpreted:'No pude interpretar el mensaje. ',
+ unavailable:'El servicio de interpretación no está disponible ahora. ',
+ keptDraft:'El gasto pendiente sigue guardado. ',
+ notRegistered:'No se registró ningún gasto; ',
+ unsupported:'Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.',
+ unauthorized:'Este número no está autorizado para registrar gastos. Revisa su configuración con la familia.',
+ noLongerAuthorized:'Este número ya no está autorizado. No se registró el gasto.',
+ referenceGone:'No registré el gasto: una referencia dejó de estar disponible. ',
+};

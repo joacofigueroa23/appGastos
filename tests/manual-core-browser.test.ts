@@ -10,6 +10,7 @@ import {migrate} from '../scripts/migrate';
 import {seed} from '../scripts/seed';
 import {enqueue} from '../src/backend/whatsapp/repository';
 import {whatsappProcessor} from '../src/backend/whatsapp/processor';
+import {emptyInterpretation,type Interpretation} from '../src/backend/whatsapp/candidate';
 
 const delay = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(check:()=>Promise<any>, message:string) {
@@ -264,6 +265,23 @@ test('Núcleo manual en navegador: gestión, filtros, CRUD y dashboard', { timeo
     await field('[aria-label="Moneda del dashboard"]','ARS');
     assert.ok((await evaluate('document.body.innerText')).includes('1.235,56'));
     assert.ok((await evaluate('document.querySelector(\'[aria-label="Gastos por Categoría"]\').innerText')).includes('1.235,56'));
+    // Gasto completado en varios mensajes de una conversación: Dashboard, categoría, tarjeta e Historial.
+    const answers:Record<string,Partial<Interpretation>>={'Compré en Disco':{merchant:'Disco',description:'Compra en Disco',category:'Supermercado'}};
+    const conversational=whatsappProcessor(db.pool,async(ctx)=>({...emptyInterpretation(),...answers[ctx.text]}),async()=>{});
+    let step=0;
+    for(const text of ['Compré en Disco','500','crédito','Visa familia']){
+      step++;
+      await enqueue(db.pool,'00000000-0000-4000-8000-000000000001',[{id:'browser-conversation-'+step,sender,text,type:'text',receivedAt:new Date(),metaTimestamp:new Date(Date.parse('2026-10-08T15:00:00Z')+step*1000)}]);
+      await conversational.processNext();await conversational.replyNext();
+    }
+    const registered=(await db.pool.query("SELECT outcome,expense_id FROM appgastos.whatsapp_messages WHERE message_id='browser-conversation-4'")).rows[0];
+    assert.equal(registered.outcome,'registered');
+    await waitFor(async()=>(await evaluate('document.body.innerText')).includes('1.735,56'),'El gasto conversacional no apareció en el Dashboard.');
+    assert.ok((await evaluate('document.querySelector(\'[aria-label="Gastos por Categoría"]\').innerText')).includes('1.735,56'));
+    assert.ok((await evaluate('document.querySelector(\'[aria-label="Gastos por Tarjeta"]\').innerText')).includes('Visa familia'));
+    await click('Historial de Gastos');
+    await waitFor(async()=>(await rows())===3,'El gasto conversacional no apareció en Historial.');
+    assert.ok((await evaluate('document.body.innerText')).includes('Compra en Disco'));
     await command('Browser.close');
   } finally {
     ws?.close();

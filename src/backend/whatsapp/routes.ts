@@ -47,7 +47,9 @@ export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOpti
       const sender=normalizePhone(m.from);
       if(!sender||typeof m.id!=='string'||!m.id||m.id.length>256||typeof m.type!=='string'||m.type.length>40)throw new Error();
       if(m.type==='text'&&(typeof m.text?.body!=='string'||!m.text.body.trim()||m.text.body.length>4096))throw new Error();
-      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date()});
+      // timestamp de Meta: segundos Unix como string. Inválido o ausente → se ordena por recepción.
+      const metaTimestamp=typeof m.timestamp==='string'&&/^\d{1,12}$/.test(m.timestamp)?new Date(Number(m.timestamp)*1000):null;
+      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date(),metaTimestamp});
       if(messages.length>100)throw new Error();
      }
     }

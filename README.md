@@ -81,7 +81,7 @@ El servidor Express incluye el webhook oficial verificado para Meta WhatsApp Clo
 - **Endpoint de recepción de mensajes (POST)**: `/api/whatsapp/webhook`
 - **Token de verificación por defecto**: `WHATSAPP_VERIFY_TOKEN` del entorno (sin valor predeterminado)
 
-El webhook firmado recibe únicamente gastos por texto de integrantes activos identificados por teléfono. Gemini interpreta; el backend valida referencias reales y registra mediante el servicio existente en PostgreSQL. Los mensajes incompletos no crean gastos. El ID único del mensaje evita duplicados; la confirmación se envía después del COMMIT. Imágenes y audios no se interpretan como gastos.
+El webhook firmado recibe únicamente gastos por texto de integrantes activos identificados por teléfono. Gemini interpreta; el backend valida referencias reales y registra mediante el servicio existente en PostgreSQL. Si falta un dato, el bot pregunta de a uno y registra un único gasto al completarlo. El ID único del mensaje evita duplicados; la confirmación se envía después del COMMIT. Imágenes y audios no se interpretan como gastos.
 
 **Configuración, seguridad y prueba con tu número real:** [docs/whatsapp.md](docs/whatsapp.md).
 

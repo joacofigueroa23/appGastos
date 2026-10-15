@@ -1,23 +1,26 @@
 
 # WhatsApp por texto: configuración y operación
 
-Esta etapa admite un gasto por mensaje de texto. No admite conversaciones de varios turnos,
-imágenes, audio, tickets, consultas financieras ni creación de catálogos por WhatsApp.
+Un gasto por texto, en un mensaje completo o completado a lo largo de varios mensajes
+(ver "Conversación"). No admite imágenes, audio, tickets, consultas financieras,
+creación de catálogos por WhatsApp ni varios gastos pendientes por integrante.
 El código y las pantallas anteriores se conservan en modo demo explícito.
 
 ## Flujo
 
-Webhook POST con firma válida → recepción durable en PostgreSQL → identificación del miembro
-→ Gemini con catálogos de la familia → ExpenseCandidate → validación determinista
-→ createExpense con source=whatsapp → COMMIT → respuesta por Meta.
+Webhook POST con firma válida → recepción durable en PostgreSQL (con el timestamp de Meta)
+→ worker en orden por remitente → identificación del miembro → conversación activa
+→ reglas deterministas o Gemini → validación del parche (evidencia del mensaje)
+→ actualización del borrador → validación del borrador → UNA pregunta, o
+createExpense con source=whatsapp → COMMIT → respuesta por Meta.
 
 El webhook devuelve 200 únicamente después de guardar los mensajes en PostgreSQL.
 Una recepción que no se pudo guardar devuelve 503 para que Meta pueda reintentar.
 200 confirma recepción técnica, no registro financiero.
 
 El worker de Express revisa pendientes cada 2 segundos y recupera tareas con lease vencida.
-No es un PendingExpense ni almacena una conversación. Cada mensaje se evalúa por separado.
-El texto original se elimina de la fila al completar el procesamiento.
+El texto original se elimina de la fila al completar el procesamiento; el borrador guarda solo
+los fragmentos que respaldan cada dato ("35 mil", "Carrefour").
 Los logs solo muestran códigos técnicos, sin números, texto, credenciales ni candidatos.
 
 ## Variables del servidor
@@ -39,6 +42,55 @@ Opcionales:
 - GEMINI_MODEL: lista separada por comas; ante sobrecarga (503/429/timeout) se prueba el siguiente. Por defecto gemini-3.5-flash-lite,gemini-3.1-flash-lite.
   Configurar un único modelo desactiva el respaldo: usar al menos dos (ver .env.example).
 - WHATSAPP_GRAPH_VERSION: v21.0 por defecto; usar una versión habilitada en tu aplicación.
+- WHATSAPP_CONVERSATION_TTL_MINUTES: minutos sin mensajes válidos tras los cuales vence una
+  conversación pendiente. Entero de 1 a 1440; ausente o inválido → 30. Se lee solo en
+  src/backend/whatsapp/config.ts.
+
+## Conversación (varios mensajes, un gasto)
+
+```
+Usuario: Compré en Carrefour
+Bot:     ¿Cuánto gastaste?
+Usuario: 35 mil
+Bot:     ¿Cómo pagaste? Efectivo, débito, crédito, transferencia o billetera virtual.
+Usuario: crédito
+Bot:     ¿Con qué tarjeta? 1) Visa  2) Mastercard  3) Ninguna
+Usuario: Visa
+Bot:     ✅ Registrado: $35.000 en Carrefour · Supermercado · Visa.
+```
+
+Modelo: appgastos.whatsapp_conversations guarda sesión y borrador (draft JSONB) en una fila.
+Estados: active, confirmed (con expense_id), cancelled, expired, error. Un índice único parcial
+permite una sola conversación activa por integrante. Cada mensaje guarda su conversation_id.
+Nada se borra: las conversaciones cerradas quedan como auditoría.
+
+- Un mensaje completo se registra directo, sin crear conversación.
+- Si falta algo, se crea la conversación y se pregunta UN campo, en este orden:
+  monto → medio de pago → tarjeta → categoría (→ fecha, solo si se indicó una fecha no válida).
+- Tarjeta: se pregunta si el medio es crédito/débito y hay tarjetas activas de ese tipo o sin
+  tipo. "Ninguna" o el número de la lista son respuestas válidas. Si el nombre coincide con varias
+  tarjetas, decide el tipo (crédito/débito); si siguen varias, se pregunta. Nunca la primera.
+- Categoría: siempre obligatoria; se ofrece la lista numerada de categorías activas.
+- Descripción: nunca se pregunta; si falta, "Compra en {comercio}" o "Gasto en {categoría}".
+- Fecha: la del primer mensaje en APP_TIME_ZONE, salvo fecha explícita.
+- Moneda: la de la familia salvo moneda explícita. Respuesta con $35.000 o US$ 100.
+- Respuestas cortas (monto, medio, tarjeta, categoría, número de lista, fecha) se resuelven sin
+  Gemini. Si no alcanza, Gemini recibe el borrador con nombres reales y el campo preguntado.
+- Cada dato nuevo se valida contra la evidencia del mensaje que lo aporta; el borrador completo se
+  vuelve a validar contra las reglas del gasto y los catálogos activos antes de registrar.
+- Correcciones: un dato ya cargado solo cambia con una frase de corrección ("perdón",
+  "me equivoqué", "en realidad", "corrijo", "no fue X, fue Y"). Sin esa frase, un dato cargado se
+  ignora; dos o más datos cargados distintos son otro gasto: se informa el pendiente y no se mezcla.
+- Cancelación: el mensaje empieza con cancelar, cancelá, no lo cargues, olvidalo, dejalo.
+- Tres respuestas incomprensibles seguidas cancelan la conversación con aviso.
+- Vencimiento: se evalúa con la hora del siguiente mensaje; la conversación queda expired y ese
+  mensaje se procesa como interacción nueva. No se avisa proactivamente.
+- Orden: los mensajes de un remitente se procesan en serie según el timestamp de Meta.
+  Una versión en la conversación evita aplicar un parche calculado sobre un borrador viejo.
+- Gemini caído: el borrador no cambia. Error pasajero → reintento en cola; definitivo → aviso y
+  se repite la pregunta pendiente.
+- Billeteras (Mercado Pago, MP, QR, Brubank, billetera) se registran como "billetera virtual"
+  sin identificar cuál. La lista está en WALLET_NAMES (candidate.ts).
 
 No hay una API web que permita cambiar credenciales reales. GET /api/whatsapp/config
 solo devuelve indicadores de presencia e ID enmascarado; nunca devuelve el verify token.
@@ -62,6 +114,12 @@ Generar un token de System User sin vencimiento:
    meta_token_*. Si el token se filtra, revocarlo desde el mismo usuario del sistema.
 
 ## Migración mínima
+
+20261016120000_whatsapp_conversations.sql (capa conversacional) crea
+appgastos.whatsapp_conversations (privada, RLS sin políticas) y agrega a whatsapp_messages
+conversation_id, meta_timestamp y los resultados nuevos del CHECK de outcome
+(question, corrected, cancelled, pending_conflict, nothing_to_cancel, unrecognized).
+No modifica filas existentes: los mensajes históricos quedan con meta_timestamp NULL.
 
 20261011213315_whatsapp_text_inbox.sql crea appgastos.whatsapp_messages:
 ID único de mensaje, familia, remitente, texto pendiente, tipo, recepción,
@@ -174,9 +232,9 @@ No hay extracción ficticia ni éxito simulado.
    Historial y Dashboard se actualizan dentro de aproximadamente 10 segundos con la página
    visible; elegir el mes de la recepción y la moneda correcta. Al volver a la ventana
    también se actualizan los gastos.
-10. Enviar:
-    Compré en Carrefour
-    Debe pedir monto/medio de pago y cualquier otro dato no resuelto. No debe crear gasto.
+10. Conversación: enviar "Compré en Carrefour" y responder de a una pregunta
+    (35 mil → crédito → Visa). Se crea UN gasto al final; antes no se registra nada.
+    Probar también "Perdón, fueron 38 mil" en medio de la conversación y "cancelar".
     Enviar una imagen/audio: solo responde que se admiten textos.
 11. Desde un número no autorizado: debe rechazar el registro sin llamar Gemini.
 12. Para repetir el mismo ID y forzar caídas/errores, usar los tests aislados;

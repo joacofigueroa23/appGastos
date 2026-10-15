@@ -27,9 +27,11 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
   assert.equal(r.expense!.amount,'35000.00');assert.equal(r.expense!.date,'2026-10-11');assert.equal(r.expense!.currency,'ARS');
   assert.equal(r.expense!.reportedByMemberId,member.id);assert.equal(r.expense!.cardId,card.id);
  });
- await t.test('monto faltante y descripción obligatoria',()=>{
+ await t.test('monto faltante; la descripción se deriva y nunca falta',()=>{
   const r=validateExpenseCandidate({...base,amount:null,amountText:null,description:null},context);assert.equal(r.valid,false);
-  assert.deepEqual(r.missingFields,['monto','descripción']);
+  assert.deepEqual(r.missingFields,['monto']);
+  assert.equal(validateExpenseCandidate({...base,description:null},context).expense!.description,'Compra en Carrefour');
+  assert.equal(validateExpenseCandidate({...base,description:null,merchant:null},{...context,text:'Gasté 35000 con Visa crédito'}).expense!.description,'Gasto en Supermercado');
  });
  await t.test('monto inválido, cero y monto sin evidencia',()=>{
   for(const amount of ['0','-1','35000.111','123456'])assert.equal(validateExpenseCandidate({...base,amount},context).valid,false);
@@ -52,7 +54,10 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
   assert.equal(validateExpenseCandidate({...base,paymentMethod:'cash',paymentMethodText:'efectivo'},{...context,text:'Gasté 35000 en Carrefour con Visa efectivo'}).valid,false);
   const cash=validateExpenseCandidate({...base,card:null,paymentMethod:'cash',paymentMethodText:'efectivo'},{...context,text:'Gasté 35000 en Carrefour en efectivo'});
   assert.equal(cash.valid,true);assert.equal(cash.expense!.cardId,null);
-  assert.equal(validateExpenseCandidate({...base,card:null,paymentMethodText:'crédito'},{...context,text:'Gasté 35000 en Carrefour con tarjeta crédito'}).valid,true);
+  // Crédito sin tarjeta: si hay tarjetas activas utilizables se pregunta cuál; si no hay, se registra sin tarjeta.
+  const noCard=validateExpenseCandidate({...base,card:null,paymentMethodText:'crédito'},{...context,text:'Gasté 35000 en Carrefour con tarjeta crédito'});
+  assert.equal(noCard.valid,false);assert.deepEqual(noCard.missingFields,['tarjeta']);
+  assert.equal(validateExpenseCandidate({...base,card:null,paymentMethodText:'crédito'},{...context,text:'Gasté 35000 en Carrefour con tarjeta crédito',cards:[{...card,cardType:'debit_card'}]}).valid,true);
  });
  await t.test('tipo configurado de la tarjeta decide crédito/débito; nunca contradice el mensaje',()=>{
   const plain={...base,paymentMethod:null,paymentMethodText:null},text='Gasté 35000 en Carrefour con Visa';
@@ -228,7 +233,7 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
    const r=await incoming('complete');assert.equal(r.outcome,'registered');assert.equal(r.reply_state,'sent');assert.equal(r.text_body,null);
    const e=(await db.pool.query("SELECT *,to_char(date,'YYYY-MM-DD') date_only FROM appgastos.expenses WHERE id=$1",[r.expense_id])).rows[0];
    assert.equal(e.source,'whatsapp');assert.equal(e.reported_by_member_id,m.id);assert.equal(e.card_id,k.id);assert.equal(e.amount,'35000.00');assert.equal(e.date_only,'2026-10-11');
-   assert.match(replies.at(-1)!.text,/^Registrado:/);assert.equal(replies.at(-1)!.to,'5491144445555');
+   assert.match(replies.at(-1)!.text,/^✅ Registrado: /);assert.equal(replies.at(-1)!.to,'5491144445555');
   });
   await t.test('tarjeta con tipo configurado registra sin crédito/débito en el mensaje',async()=>{
    const typed=(await db.pool.query("INSERT INTO appgastos.cards(family_id,name,card_type) VALUES($1,'Naranja','credit_card') RETURNING id",[INITIAL_FAMILY_ID])).rows[0];
@@ -238,8 +243,11 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
     const e=(await db.pool.query('SELECT payment_method,card_id,source FROM appgastos.expenses WHERE id=$1',[r.expense_id])).rows[0];
     assert.equal(e.payment_method,'credit_card');assert.equal(e.card_id,typed.id);assert.equal(e.source,'whatsapp');
     extraction={...base,card:'Naranja',paymentMethod:'debit_card',paymentMethodText:'débito'};
+    // Tipo contradictorio: no registra; abre conversación y vuelve a preguntar el medio de pago.
     const conflict=await incoming('typed-card-conflict','Gasté 35000 en Carrefour con Naranja débito');
-    assert.equal(conflict.outcome,'incomplete');assert.equal(conflict.expense_id,null);
+    assert.equal(conflict.outcome,'question');assert.equal(conflict.expense_id,null);
+    assert.match(replies.at(-1)!.text,/no coincide con el tipo de la tarjeta.*¿Cómo pagaste\?/);
+    assert.equal((await incoming('typed-card-cancel','cancelar')).outcome,'cancelled');
    }finally{extraction=base;}
   });
   await t.test('duplicados, concurrencia y reinicio no crean otro gasto ni reenvían respuesta',async()=>{
@@ -268,18 +276,24 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
    assert.equal((await incoming('ambiguous-member')).outcome,'unauthorized');
    await db.pool.query('DELETE FROM appgastos.family_members WHERE id=$1',[duplicate.id]);assert.equal(calls,before);
   });
-  await t.test('monto faltante, categoría inválida y medio desconocido no registran',async()=>{
-   extraction={...base,amount:null,amountText:null};assert.equal((await incoming('no-amount')).outcome,'incomplete');assert.match(replies.at(-1)!.text,/monto/);
-   extraction={...base,category:'Libre'};assert.equal((await incoming('no-category')).outcome,'incomplete');
-   extraction={...base,paymentMethod:null,paymentMethodText:null};assert.equal((await incoming('no-payment')).outcome,'incomplete');
+  await t.test('monto faltante, categoría inválida y medio desconocido no registran: preguntan',async()=>{
+   const before=(await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n;
+   for(const [id,patch,question] of [['no-amount',{amount:null,amountText:null},/¿Cuánto gastaste\?/],['no-category',{category:'Libre'},/¿En qué categoría lo cargo\?/],
+    ['no-payment',{paymentMethod:null,paymentMethodText:null,card:null},/¿Cómo pagaste\?/]] as const){
+    extraction={...base,...patch};
+    const text=id==='no-payment'?'Gasté 35000 en Carrefour':context.text;
+    const r=await incoming(id,text);assert.equal(r.outcome,'question',id);assert.equal(r.expense_id,null);assert.match(replies.at(-1)!.text,question);
+    assert.equal((await incoming(id+'-cancel','cancelar')).outcome,'cancelled');
+   }
    extraction=base;
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n,before);
   });
   await t.test('Gemini fallido y salida inválida producen error controlado',async()=>{
    failInterpret=true;const down=await incoming('ai-down');failInterpret=false;
    assert.equal(down.outcome,'interpretation_error');assert.equal(down.last_error,'interpretation_unknown');
    extraction={amount:5};const invalid=await incoming('ai-invalid');extraction=base;
    assert.equal(invalid.outcome,'interpretation_error');assert.equal(invalid.last_error,'interpretation_invalid_output');
-   assert.doesNotMatch(replies.at(-1)!.text,/^Registrado:/);
+   assert.doesNotMatch(replies.at(-1)!.text,/Registrado:/);
   });
   await t.test('Gemini con fallo pasajero reintenta y solo informa al agotar intentos',async()=>{
    transientInterpret=true;
@@ -307,7 +321,7 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
    await db.pool.query('DROP TRIGGER fail_insert ON appgastos.expenses');await db.pool.query('DROP FUNCTION appgastos.fail_test()');
    await db.pool.query("UPDATE appgastos.whatsapp_messages SET next_attempt_at=now() WHERE message_id='insert-fails'");
    await proc.processNext();await proc.replyNext();
-   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n,count+1);assert.match(replies.at(-1)!.text,/^Registrado:/);
+   assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n,count+1);assert.match(replies.at(-1)!.text,/^✅ Registrado: /);
   });
   await t.test('recepción durable se recupera de un proceso caído con lease vencida',async()=>{
    await enqueue(db.pool,INITIAL_FAMILY_ID,[{id:'crash',sender:'5491144445555',text:context.text,type:'text',receivedAt:new Date()}]);

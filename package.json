@@ -12,7 +12,7 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts",
+    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts tests/whatsapp-conversation.test.ts",
     "test:browser": "node --import tsx --test tests/database-browser.test.ts tests/manual-core-browser.test.ts",
     "test:legacy-browser": "tsx scripts/test-legacy-browser.ts"
   },

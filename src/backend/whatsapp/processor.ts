@@ -1,79 +1,192 @@
 
-import type {Pool} from 'pg';
+import type {Pool,PoolClient} from 'pg';
 import {expenseService} from '../expenses/service';
 import {transaction} from '../expenses/repository';
 import {ApiError} from '../expenses/validation';
-import {InterpretationError,parseInterpretation,referenceDate,validateExpenseCandidate,type CardEntry,type CatalogEntry,type InterpretationContext} from './candidate';
+import {InterpretationError,parseInterpretation,referenceDate,validateDraft,validatePatch,type CardEntry,type CatalogEntry,type DraftValidation,type InterpretationContext} from './candidate';
+import {applyCandidatePatch,type DraftField,type DraftPatch,type ExpenseDraft} from './draft';
+import {classifyPatch,deterministicAnswer,isCancel} from './intent';
+import {closeConversation,createConversation,expireConversations,failConversations,findActiveConversation,saveConversation,type Conversation} from './conversation';
+import {REPLIES,confirmation,draftSummary,fieldNotice,questionFor} from './replies';
+import {MAX_UNKNOWN_ANSWERS,conversationTtlMinutes} from './config';
 import {normalizePhone} from './security';
-import {claim} from './repository';
+import {claim,type InboxRow} from './repository';
 import type {Interpreter} from './interpretation';
 import type {ReplySender} from './transport';
 type Member=CatalogEntry&{phone_number:string|null};
+type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized';
+interface Catalog {familyCurrency:string;categories:CatalogEntry[];cards:CardEntry[];member:Member}
+// Lo que decide un mensaje (fuera de la transacción); se aplica dentro de ella.
+type Decision=
+ |{kind:'reply';outcome:Outcome;reply:string;failMembers?:string[]}
+ |{kind:'interpretation_error';transient:boolean;lastError:string}
+ |{kind:'rejected';errors:string[]}
+ |{kind:'cancel'}|{kind:'conflict'}|{kind:'unknown'}
+ |{kind:'update';draft:ExpenseDraft;result:DraftValidation;corrected:boolean;notice:string};
+// La conversación cambió entre la lectura y la transacción: se reprocesa el mensaje.
+class ConversationChanged extends Error {}
 const MAX_INTERPRETATION_ATTEMPTS=5;
+
 export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender){
+ async function loadCatalog(familyId:string,member:Member):Promise<Catalog>{
+  const family=(await pool.query('SELECT default_currency FROM appgastos.families WHERE id=$1',[familyId])).rows[0];
+  const categories=(await pool.query('SELECT id,name,active FROM appgastos.categories WHERE family_id=$1',[familyId])).rows as CatalogEntry[];
+  const cards=(await pool.query('SELECT id,name,active,card_type AS "cardType" FROM appgastos.cards WHERE family_id=$1',[familyId])).rows as CardEntry[];
+  return {familyCurrency:family.default_currency,categories,cards,member};
+ }
+ // Borrador con nombres reales para Gemini (sin ids ni datos ficticios).
+ function namedDraft(draft:ExpenseDraft,catalog:Catalog):Record<string,string|null>{
+  return {amount:draft.amount?.value??null,currency:draft.currency?.value??null,date:draft.date?.value??null,merchant:draft.merchant?.value??null,
+   category:draft.category?catalog.categories.find(c=>c.id===draft.category!.value)?.name??null:null,paymentMethod:draft.paymentMethod?.value??null,
+   card:draft.card?draft.card.value===null?'ninguna':catalog.cards.find(c=>c.id===draft.card!.value)?.name??null:null};
+ }
+
+ async function decide(row:InboxRow,at:Date,catalog:Catalog,conversation:Conversation|null):Promise<Decision>{
+  const text=row.text_body!;
+  if(isCancel(text))return conversation?{kind:'cancel'}:{kind:'reply',outcome:'nothing_to_cancel',reply:REPLIES.nothingToCancel};
+  const draft:ExpenseDraft=conversation?.draft??{referenceDate:referenceDate(at)};
+  const expected=conversation?.expectedField??null;
+  const ctx:InterpretationContext={text,referenceDate:draft.referenceDate,defaultCurrency:catalog.familyCurrency,categories:catalog.categories,cards:catalog.cards,member:catalog.member,
+   ...(conversation?{conversation:{draft:namedDraft(draft,catalog),expectedField:expected}}:{})};
+  let patch:DraftPatch,fieldErrors:Partial<Record<DraftField,string>>={};
+  // Respuesta corta al campo preguntado: reglas deterministas antes que Gemini.
+  const quick=conversation?deterministicAnswer(expected,text,draft,catalog):null;
+  if(quick?.kind==='patch')patch=quick.patch;
+  else{
+   let raw;
+   if(quick)raw=quick.raw;
+   else try{raw=parseInterpretation(await interpret(ctx));}
+   catch(error){
+    const transient=error instanceof InterpretationError&&error.message==='transient';
+    // Un fallo pasajero de Gemini vuelve el mensaje a la cola sin tocar el borrador; agotados los intentos se informa.
+    if(transient&&row.attempts<MAX_INTERPRETATION_ATTEMPTS)throw error;
+    // Solo códigos técnicos (ej. interpretation_failed:http_404), nunca texto del mensaje.
+    const lastError=error instanceof InterpretationError?'interpretation_'+error.message+(error.detail?':'+error.detail:''):'interpretation_unknown';
+    console.warn('whatsapp: '+lastError);
+    return {kind:'interpretation_error',transient,lastError};
+   }
+   const checked=validatePatch(raw,ctx,draft,{strict:!conversation,expected});
+   if(checked.errors.length)return {kind:'rejected',errors:checked.errors};
+   patch=checked.patch;fieldErrors=checked.fieldErrors;
+  }
+  const classified=classifyPatch(draft,patch,text,expected);
+  if(classified.intent==='conflict')return {kind:'conflict'};
+  const failed=Object.keys(fieldErrors) as DraftField[];
+  if(classified.intent==='unknown'&&!failed.length)return conversation?{kind:'unknown'}:{kind:'reply',outcome:'unrecognized',reply:REPLIES.help};
+  const next=applyCandidatePatch(draft,classified.patch,failed);
+  return {kind:'update',draft:next,result:validateDraft(next,{...catalog,defaultCurrency:catalog.familyCurrency}),corrected:classified.intent==='correct',notice:fieldNotice(Object.values(fieldErrors) as string[])};
+ }
+
+ async function commit(db:PoolClient,row:InboxRow,at:Date,decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null){
+  const locked=(await db.query('SELECT state,lease_token FROM appgastos.whatsapp_messages WHERE message_id=$1 FOR UPDATE',[row.message_id])).rows[0];
+  if(locked.state!=='processing'||locked.lease_token!==row.lease_token)return;
+  let outcome:Outcome='incomplete',reply='',lastError:string|null=null,expenseId:string|null=null,conversationId:string|null=conversation?.id??null;
+  const finish=()=>db.query("UPDATE appgastos.whatsapp_messages SET state='completed',outcome=$3,expense_id=$4,reply_text=$5,completed_at=now(),text_body=NULL,lease_token=NULL,lease_until=NULL,last_error=$6,conversation_id=$7 WHERE message_id=$1 AND lease_token=$2",
+   [row.message_id,row.lease_token,outcome,expenseId,reply,lastError,conversationId]);
+  if(decision.kind==='reply'&&decision.failMembers)await failConversations(db,row.family_id,decision.failMembers);
+  if(catalog){
+   const memberId=catalog.member.id;
+   await expireConversations(db,row.family_id,memberId,at);
+   const current=await findActiveConversation(db,row.family_id,memberId,true);
+   if((current?.id??null)!==(conversation?.id??null)||(current&&conversation&&current.version!==conversation.version))throw new ConversationChanged();
+   // El integrante debe seguir autorizado al momento de escribir.
+   const member=(await db.query('SELECT active,phone_number FROM appgastos.family_members WHERE family_id=$1 AND id=$2 FOR SHARE',[row.family_id,memberId])).rows[0];
+   const all=(await db.query('SELECT id,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[row.family_id])).rows as Member[];
+   if(!member?.active||normalizePhone(member.phone_number)!==row.sender||all.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender).length!==1){
+    if(conversation)await closeConversation(db,conversation.id,'error');
+    outcome='unauthorized';reply=REPLIES.noLongerAuthorized;await finish();return;
+   }
+  }
+  // Repite la pregunta pendiente y guarda las opciones mostradas (el número elegido debe significar lo mismo).
+  const ask=async(c:Conversation,unknownCount:number,prefix:string)=>{
+   const question=questionFor(c.expectedField!,c.draft,catalog!);
+   const draft={...c.draft};if(question.options)draft.options=question.options;else delete draft.options;
+   await saveConversation(db,c.id,{draft,expectedField:c.expectedField,unknownCount});
+   return prefix+question.text;
+  };
+  switch(decision.kind){
+   case 'reply':outcome=decision.outcome;reply=decision.reply;if(outcome==='nothing_to_cancel'||outcome==='unauthorized'||outcome==='unsupported')conversationId=null;break;
+   case 'interpretation_error':{
+    outcome='interpretation_error';lastError=decision.lastError;
+    const lead=decision.transient?REPLIES.unavailable:REPLIES.notInterpreted;
+    reply=conversation?await ask(conversation,conversation.unknownCount,lead+REPLIES.keptDraft):
+     lead+REPLIES.notRegistered+(decision.transient?'reenvía el mensaje en unos minutos.':'intenta con un texto completo o usa la carga manual.');
+    break;
+   }
+   case 'rejected':
+    if(conversation){outcome='unrecognized';reply=await ask(conversation,conversation.unknownCount,fieldNotice(decision.errors));}
+    else{outcome='incomplete';reply='No registré el gasto. Necesito revisar: '+decision.errors.join(', ')+'. Envía un nuevo mensaje.';}
+    break;
+   case 'cancel':await closeConversation(db,conversation!.id,'cancelled');outcome='cancelled';reply=REPLIES.cancelled;break;
+   case 'conflict':outcome='pending_conflict';reply=REPLIES.conflict(draftSummary(conversation!.draft,catalog!,catalog!.familyCurrency));break;
+   case 'unknown':{
+    const count=conversation!.unknownCount+1;
+    if(count>=MAX_UNKNOWN_ANSWERS){await closeConversation(db,conversation!.id,'cancelled');outcome='cancelled';reply=REPLIES.tooManyUnknown;}
+    else{outcome='unrecognized';reply=await ask(conversation!,count,REPLIES.unknown);}
+    break;
+   }
+   case 'update':{
+    const {result,draft}=decision;
+    if(result.valid&&result.expense){
+     try{
+      const expense=await expenseService(pool,row.family_id).createExpense(result.expense,'whatsapp',db);
+      expenseId=expense.id;outcome='registered';
+      if(conversation)await closeConversation(db,conversation.id,'confirmed',expense.id);
+      // La confirmación usa los valores guardados en PostgreSQL, no los del borrador.
+      reply=(decision.corrected?REPLIES.corrected:'')+confirmation({amount:expense.amount,currency:expense.currency,familyCurrency:catalog!.familyCurrency,merchant:expense.merchant,
+       categoryName:expense.categoryName,cardName:catalog!.cards.find(c=>c.id===expense.cardId)?.name??null});
+     }catch(error){
+      if(!(error instanceof ApiError))throw error;
+      outcome='incomplete';reply=REPLIES.referenceGone+'Revisa el mensaje y envíalo completo.';
+     }
+     break;
+    }
+    const field=result.missingFields[0];
+    if(!field){
+     outcome=conversation?'unrecognized':'incomplete';
+     reply='No registré el gasto. Necesito revisar: '+result.validationErrors.join(', ')+'.';break;
+    }
+    const question=questionFor(field,draft,catalog!);
+    const saved:ExpenseDraft={...draft,...(question.options?{options:question.options}:{})};
+    // Cada mensaje válido renueva el vencimiento a partir de la hora del mensaje.
+    const expiresAt=new Date(at.getTime()+conversationTtlMinutes()*60000);
+    if(conversation)await saveConversation(db,conversation.id,{draft:saved,expectedField:field,unknownCount:0,expiresAt});
+    else conversationId=(await createConversation(db,{familyId:row.family_id,memberId:catalog!.member.id,draft:saved,expectedField:field,expiresAt})).id;
+    outcome=decision.corrected?'corrected':'question';
+    reply=(decision.corrected?REPLIES.corrected:'')+decision.notice+fieldNotice(result.validationErrors)+question.text;
+    break;
+   }
+  }
+  await finish();
+ }
+
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
   try{
-   let reply='',outcome='interpretation_error',lastError:string|null=null,ctx:InterpretationContext|undefined;
-   let validated:ReturnType<typeof validateExpenseCandidate>|undefined;
-   if(row.message_type!=='text'){reply='Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.';outcome='unsupported';}
+   // Hora real del mensaje: Meta si está, si no la recepción. Define fecha de referencia y vencimiento.
+   const at=row.meta_timestamp??row.received_at;
+   let decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
+   if(row.message_type!=='text')decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
    else{
     const members=(await pool.query('SELECT id,name,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[row.family_id])).rows as Member[];
     const matches=members.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender);
-    if(matches.length!==1){reply='Este número no está autorizado para registrar gastos. Revisa su configuración con la familia.';outcome='unauthorized';}
-    else{
-     const family=(await pool.query('SELECT default_currency FROM appgastos.families WHERE id=$1',[row.family_id])).rows[0];
-     const categories=(await pool.query('SELECT id,name,active FROM appgastos.categories WHERE family_id=$1',[row.family_id])).rows as CatalogEntry[];
-     const cards=(await pool.query('SELECT id,name,active,card_type AS "cardType" FROM appgastos.cards WHERE family_id=$1',[row.family_id])).rows as CardEntry[];
-     ctx={text:row.text_body!,referenceDate:referenceDate(row.received_at),defaultCurrency:family.default_currency,categories,cards,member:matches[0]};
-     try{validated=validateExpenseCandidate(parseInterpretation(await interpret(ctx)),ctx);}
-     catch(error){
-      const transient=error instanceof InterpretationError&&error.message==='transient';
-      // Un fallo pasajero de Gemini vuelve el mensaje a la cola; agotados los intentos se informa.
-      if(transient&&row.attempts<MAX_INTERPRETATION_ATTEMPTS)throw error;
-      reply=transient?'El servicio de interpretación no está disponible ahora. No se registró ningún gasto; reenvía el mensaje en unos minutos.':
-       'No pude interpretar el mensaje. No se registró ningún gasto; intenta con un texto completo o usa la carga manual.';
-      outcome='interpretation_error';
-      // Solo códigos técnicos (ej. interpretation_failed:http_404), nunca texto del mensaje.
-      lastError=error instanceof InterpretationError?'interpretation_'+error.message+(error.detail?':'+error.detail:''):'interpretation_unknown';
-      console.warn('whatsapp: '+lastError);
-     }
-     if(validated){
-      if(validated.valid){outcome='registered';}
-      else{
-       reply='No registré el gasto. Necesito revisar: '+[...validated.missingFields,...validated.validationErrors].join(', ')+'. Envía un nuevo mensaje completo; no continúo conversaciones todavía.';
-       outcome='incomplete';
-      }
-     }
+    if(matches.length!==1){
+     // Un número que dejó de estar autorizado no continúa conversaciones; no se llama a Gemini.
+     const owners=members.filter(m=>normalizePhone(m.phone_number)===row.sender).map(m=>m.id);
+     decision={kind:'reply',outcome:'unauthorized',reply:REPLIES.unauthorized,failMembers:owners};
+    }else{
+     catalog=await loadCatalog(row.family_id,matches[0]);
+     conversation=await findActiveConversation(pool,row.family_id,matches[0].id);
+     // Vencida: no se completa; se marca expired en la transacción y el mensaje es una interacción nueva.
+     if(conversation&&new Date(conversation.expiresAt)<=at)conversation=null;
+     decision=await decide(row,at,catalog,conversation);
     }
    }
-   // Expense and processed message commit together, under a durable lock.
-   await transaction(pool,async db=>{
-    const locked=(await db.query('SELECT state,lease_token FROM appgastos.whatsapp_messages WHERE message_id=$1 FOR UPDATE',[row.message_id])).rows[0];
-    if(locked.state!=='processing'||locked.lease_token!==row.lease_token)return;
-    let expenseId:string|null=null;
-    if(validated?.valid&&validated.expense&&ctx){
-     const member=(await db.query('SELECT active,phone_number FROM appgastos.family_members WHERE family_id=$1 AND id=$2 FOR SHARE',[row.family_id,ctx.member.id])).rows[0];
-     const allMembers=(await db.query('SELECT id,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[row.family_id])).rows as Member[];
-     if(!member?.active||normalizePhone(member.phone_number)!==row.sender||allMembers.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender).length!==1){
-      reply='Este número ya no está autorizado. No se registró el gasto.';outcome='unauthorized';
-     }else{
-      try{
-       const expense=await expenseService(pool,row.family_id).createExpense(validated.expense,'whatsapp',db);
-       expenseId=expense.id;
-       reply='Registrado: '+expense.currency+' '+expense.amount+' · '+(expense.merchant||expense.description)+' · '+expense.categoryName+(ctx.cards.find(c=>c.id===expense.cardId)?' · '+ctx.cards.find(c=>c.id===expense.cardId)!.name:'')+'.';
-      }catch(error){
-       if(!(error instanceof ApiError))throw error;
-       reply='No registré el gasto: una referencia dejó de estar disponible. Revisa el mensaje y envíalo completo.';outcome='incomplete';
-      }
-     }
-    }
-    await db.query("UPDATE appgastos.whatsapp_messages SET state='completed',outcome=$3,expense_id=$4,reply_text=$5,completed_at=now(),text_body=NULL,lease_token=NULL,lease_until=NULL,last_error=$6 WHERE message_id=$1 AND lease_token=$2",
-     [row.message_id,row.lease_token,outcome,expenseId,reply,lastError]);
-   });
+   await transaction(pool,db=>commit(db,row,at,decision,catalog,conversation));
   }catch(error){
-   const code=error instanceof InterpretationError?'interpretation_retry':'processing_failed';
-   await pool.query("UPDATE appgastos.whatsapp_messages SET state='pending',lease_token=NULL,lease_until=NULL,last_error=$3,next_attempt_at=now()+interval '15 seconds' WHERE message_id=$1 AND state='processing' AND lease_token=$2",[row.message_id,row.lease_token,code]);
+   const changed=error instanceof ConversationChanged;
+   const code=error instanceof InterpretationError?'interpretation_retry':changed?'conversation_changed':'processing_failed';
+   await pool.query("UPDATE appgastos.whatsapp_messages SET state='pending',lease_token=NULL,lease_until=NULL,last_error=$3,next_attempt_at=now()+($4||' seconds')::interval WHERE message_id=$1 AND state='processing' AND lease_token=$2",[row.message_id,row.lease_token,code,changed?'0':'15']);
    console.warn('whatsapp: '+code);
   }
   return true;
