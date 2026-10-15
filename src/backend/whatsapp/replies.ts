@@ -32,9 +32,9 @@ export function questionFor(field:DraftField,draft:ExpenseDraft,catalog:{categor
  }
 }
 
-export function confirmation(input:{amount:string;currency:string;familyCurrency:string;merchant:string|null;categoryName:string;cardName:string|null}):string{
+export function confirmation(input:{amount:string;currency:string;familyCurrency:string;merchant:string|null;categoryName:string;cardName:string|null;edited?:boolean}):string{
  const where=input.merchant?input.merchant+' · '+input.categoryName:input.categoryName;
- return '✅ Registrado: '+formatAmount(input.amount,input.currency,input.familyCurrency)+' en '+where+(input.cardName?' · '+input.cardName:'')+'.';
+ return (input.edited?'✏️ Corregido: ':'✅ Registrado: ')+formatAmount(input.amount,input.currency,input.familyCurrency)+' en '+where+(input.cardName?' · '+input.cardName:'')+'.';
 }
 // Resumen breve del borrador para el aviso de gasto pendiente.
 export function draftSummary(draft:ExpenseDraft,catalog:{categories:CatalogEntry[]},familyCurrency:string):string{
@@ -51,6 +51,9 @@ export function fieldNotice(errors:string[]):string{
 
 export const REPLIES={
  cancelled:'Listo, cancelé el gasto pendiente. No se registró nada.',
+ cancelledEdit:'Listo, cancelé la corrección. El gasto quedó como estaba.',
+ correctionUnclear:(summary:string)=>'No entendí qué corregir del último gasto ('+summary+'). Decime el dato correcto, por ejemplo: "perdón, fueron 45 mil".',
+ editGone:'No pude corregir el gasto: ya no existe o una referencia dejó de estar disponible. ',
  nothingToCancel:'No tenés ningún gasto pendiente para cancelar.',
  conflict:(summary:string)=>'Tenés un gasto pendiente ('+summary+'). Respondé la pregunta o escribí "cancelar" para empezar otro.',
  unknown:'No entendí la respuesta. ',

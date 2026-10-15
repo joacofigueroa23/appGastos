@@ -1,12 +1,13 @@
 
 import type {Pool,PoolClient} from 'pg';
 import {expenseService} from '../expenses/service';
-import {transaction} from '../expenses/repository';
+import {findExpense,transaction} from '../expenses/repository';
 import {ApiError} from '../expenses/validation';
+import type {ApiExpense} from '../../shared/apiTypes';
 import {InterpretationError,parseInterpretation,referenceDate,validateDraft,validatePatch,type CardEntry,type CatalogEntry,type DraftValidation,type InterpretationContext} from './candidate';
 import {applyCandidatePatch,type DraftField,type DraftPatch,type ExpenseDraft} from './draft';
-import {classifyPatch,deterministicAnswer,isCancel} from './intent';
-import {closeConversation,createConversation,expireConversations,failConversations,findActiveConversation,saveConversation,type Conversation} from './conversation';
+import {classifyPatch,deterministicAnswer,genericCardCorrection,hasCorrectionMarker,isCancel} from './intent';
+import {closeConversation,createConversation,expireConversations,failConversations,findActiveConversation,findCorrectableExpense,saveConversation,type Conversation} from './conversation';
 import {REPLIES,confirmation,draftSummary,fieldNotice,questionFor} from './replies';
 import {MAX_UNKNOWN_ANSWERS,conversationTtlMinutes} from './config';
 import {normalizePhone} from './security';
@@ -20,12 +21,22 @@ interface Catalog {familyCurrency:string;categories:CatalogEntry[];cards:CardEnt
 type Decision=
  |{kind:'reply';outcome:Outcome;reply:string;failMembers?:string[]}
  |{kind:'interpretation_error';transient:boolean;lastError:string}
- |{kind:'rejected';errors:string[]}
+ |{kind:'rejected';errors:string[];editing:boolean}
  |{kind:'cancel'}|{kind:'conflict'}|{kind:'unknown'}
  |{kind:'update';draft:ExpenseDraft;result:DraftValidation;corrected:boolean;notice:string};
 // La conversación cambió entre la lectura y la transacción: se reprocesa el mensaje.
 class ConversationChanged extends Error {}
 const MAX_INTERPRETATION_ATTEMPTS=5;
+const CARD_METHODS:readonly string[]=['credit_card','debit_card'];
+// Borrador de corrección a partir de un gasto guardado. referenceDate es hoy (para "ayer" en la corrección);
+// la fecha del gasto se conserva como fecha explícita.
+function draftFromExpense(e:ApiExpense,today:string):ExpenseDraft{
+ const draft:ExpenseDraft={referenceDate:today,editingExpenseId:e.id,amount:{value:e.amount,evidence:null},currency:{value:e.currency,evidence:null},
+  date:{value:e.date,evidence:null},description:{value:e.description,evidence:null},category:{value:e.categoryId,evidence:null},paymentMethod:{value:e.paymentMethod,evidence:null}};
+ if(e.merchant)draft.merchant={value:e.merchant,evidence:null};
+ if(e.cardId||CARD_METHODS.includes(e.paymentMethod))draft.card={value:e.cardId,evidence:null};
+ return draft;
+}
 
 export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender){
  async function loadCatalog(familyId:string,member:Member):Promise<Catalog>{
@@ -44,10 +55,18 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
  async function decide(row:InboxRow,at:Date,catalog:Catalog,conversation:Conversation|null):Promise<Decision>{
   const text=row.text_body!;
   if(isCancel(text))return conversation?{kind:'cancel'}:{kind:'reply',outcome:'nothing_to_cancel',reply:REPLIES.nothingToCancel};
-  const draft:ExpenseDraft=conversation?.draft??{referenceDate:referenceDate(at)};
+  let draft:ExpenseDraft=conversation?.draft??{referenceDate:referenceDate(at)};
+  // Corrección de un gasto YA registrado: frase de corrección, sin conversación abierta, y el último gasto
+  // de este integrante por WhatsApp dentro de la ventana. El borrador parte del gasto guardado y al completarse lo edita.
+  if(!conversation&&hasCorrectionMarker(text)){
+   const expenseId=await findCorrectableExpense(pool,{familyId:row.family_id,sender:row.sender,memberId:catalog.member.id,at,windowMinutes:conversationTtlMinutes()});
+   const expense=expenseId?await findExpense(pool,row.family_id,expenseId):null;
+   if(expense)draft=draftFromExpense(expense,referenceDate(at));
+  }
+  const editing=!!draft.editingExpenseId,inContext=!!conversation||editing;
   const expected=conversation?.expectedField??null;
   const ctx:InterpretationContext={text,referenceDate:draft.referenceDate,defaultCurrency:catalog.familyCurrency,categories:catalog.categories,cards:catalog.cards,member:catalog.member,
-   ...(conversation?{conversation:{draft:namedDraft(draft,catalog),expectedField:expected}}:{})};
+   ...(inContext?{conversation:{draft:namedDraft(draft,catalog),expectedField:expected}}:{})};
   let patch:DraftPatch,fieldErrors:Partial<Record<DraftField,string>>={};
   // Respuesta corta al campo preguntado: reglas deterministas antes que Gemini.
   const quick=conversation?deterministicAnswer(expected,text,draft,catalog):null;
@@ -65,16 +84,25 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
     console.warn('whatsapp: '+lastError);
     return {kind:'interpretation_error',transient,lastError};
    }
-   const checked=validatePatch(raw,ctx,draft,{strict:!conversation,expected});
-   if(checked.errors.length)return {kind:'rejected',errors:checked.errors};
+   const checked=validatePatch(raw,ctx,draft,{strict:!inContext,expected});
+   if(checked.errors.length)return {kind:'rejected',errors:checked.errors,editing};
    patch=checked.patch;fieldErrors=checked.fieldErrors;
   }
-  const classified=classifyPatch(draft,patch,text,expected);
-  if(classified.intent==='conflict')return {kind:'conflict'};
+  // "fue con tarjeta" sin crédito/débito ni nombre: el medio anterior (no tarjeta) deja de valer y se pregunta.
+  let base=draft,reopened=false;
+  if(inContext&&genericCardCorrection(text,catalog.cards)&&!(draft.paymentMethod&&CARD_METHODS.includes(draft.paymentMethod.value))){
+   base={...draft};delete base.paymentMethod;delete base.card;reopened=true;
+  }
+  const summary=()=>draftSummary(draft,catalog,catalog.familyCurrency);
+  const classified=classifyPatch(base,patch,text,expected);
+  if(classified.intent==='conflict')return conversation?{kind:'conflict'}:{kind:'reply',outcome:'unrecognized',reply:REPLIES.correctionUnclear(summary())};
   const failed=Object.keys(fieldErrors) as DraftField[];
-  if(classified.intent==='unknown'&&!failed.length)return conversation?{kind:'unknown'}:{kind:'reply',outcome:'unrecognized',reply:REPLIES.help};
-  const next=applyCandidatePatch(draft,classified.patch,failed);
-  return {kind:'update',draft:next,result:validateDraft(next,{...catalog,defaultCurrency:catalog.familyCurrency}),corrected:classified.intent==='correct',notice:fieldNotice(Object.values(fieldErrors) as string[])};
+  if(classified.intent==='unknown'&&!failed.length&&!reopened){
+   if(conversation)return {kind:'unknown'};
+   return {kind:'reply',outcome:'unrecognized',reply:editing?REPLIES.correctionUnclear(summary()):REPLIES.help};
+  }
+  const next=applyCandidatePatch(base,classified.patch,failed);
+  return {kind:'update',draft:next,result:validateDraft(next,{...catalog,defaultCurrency:catalog.familyCurrency}),corrected:classified.intent==='correct'||reopened,notice:fieldNotice(Object.values(fieldErrors) as string[])};
  }
 
  async function commit(db:PoolClient,row:InboxRow,at:Date,decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null){
@@ -115,9 +143,11 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
    }
    case 'rejected':
     if(conversation){outcome='unrecognized';reply=await ask(conversation,conversation.unknownCount,fieldNotice(decision.errors));}
-    else{outcome='incomplete';reply='No registré el gasto. Necesito revisar: '+decision.errors.join(', ')+'. Envía un nuevo mensaje.';}
+    else{outcome='incomplete';reply=(decision.editing?'No corregí el gasto':'No registré el gasto')+'. Necesito revisar: '+decision.errors.join(', ')+'. Envía un nuevo mensaje.';}
     break;
-   case 'cancel':await closeConversation(db,conversation!.id,'cancelled');outcome='cancelled';reply=REPLIES.cancelled;break;
+   case 'cancel':
+    await closeConversation(db,conversation!.id,'cancelled');outcome='cancelled';
+    reply=conversation!.draft.editingExpenseId?REPLIES.cancelledEdit:REPLIES.cancelled;break;
    case 'conflict':outcome='pending_conflict';reply=REPLIES.conflict(draftSummary(conversation!.draft,catalog!,catalog!.familyCurrency));break;
    case 'unknown':{
     const count=conversation!.unknownCount+1;
@@ -127,6 +157,22 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
    }
    case 'update':{
     const {result,draft}=decision;
+    if(result.valid&&result.expense&&draft.editingExpenseId){
+     // Corrección de un gasto registrado: se edita con el servicio central, nunca se crea otro.
+     // El mensaje no lleva expense_id (solo los mensajes que registran); la conversación sí.
+     try{
+      const expense=await expenseService(pool,row.family_id).update(draft.editingExpenseId,result.expense,db);
+      const target=conversation??await createConversation(db,{familyId:row.family_id,memberId:catalog!.member.id,draft,expectedField:null,expiresAt:at});
+      await closeConversation(db,target.id,'confirmed',expense.id);conversationId=target.id;outcome='corrected';
+      reply=confirmation({amount:expense.amount,currency:expense.currency,familyCurrency:catalog!.familyCurrency,merchant:expense.merchant,
+       categoryName:expense.categoryName,cardName:catalog!.cards.find(c=>c.id===expense.cardId)?.name??null,edited:true});
+     }catch(error){
+      if(!(error instanceof ApiError))throw error;
+      if(conversation)await closeConversation(db,conversation.id,'error');
+      outcome='incomplete';reply=REPLIES.editGone+'Corregilo desde la web.';
+     }
+     break;
+    }
     if(result.valid&&result.expense){
      try{
       const expense=await expenseService(pool,row.family_id).createExpense(result.expense,'whatsapp',db);

@@ -396,6 +396,93 @@ test('Conversación WhatsApp: PostgreSQL aislado, varios mensajes, un gasto',{ti
    assert.equal((await expense(r.expense_id)).currency,'USD');
   });
 
+  // Corrección de un gasto YA registrado (caso real: "efectivo" y después "perdón, fue con tarjeta").
+  const isolate=()=>{clock+=2*3600000;};
+  const amountOf=async(id:string)=>(await expense(id)).amount_text;
+  await t.test('corrección después de registrar: tarjeta genérica pregunta medio y tarjeta; edita el mismo gasto',async()=>{
+   isolate();
+   script.set('Compré en el carrefour',carrefour);
+   await say('Compré en el carrefour');await say('40');
+   const registered=await say('efectivo');
+   assert.equal(registered.outcome,'registered');
+   const before=await expenses();
+   const fix=await say('perdón fue con tarjeta');
+   assert.equal(fix.outcome,'corrected');assert.equal(fix.expense_id,null);
+   assert.equal(lastReply(),'Corregido. ¿Cómo pagaste? Efectivo, débito, crédito, transferencia o billetera virtual.');
+   assert.equal((await active()).draft.editingExpenseId,registered.expense_id);
+   await say('débito');
+   assert.equal(lastReply(),'¿Con qué tarjeta? 1) Mastercard Santander  2) Ninguna');
+   const done=await say('1');
+   assert.equal(done.outcome,'corrected');assert.equal(done.expense_id,null);
+   assert.equal(lastReply(),'✏️ Corregido: $40 en Carrefour · Supermercado · Mastercard Santander.');
+   assert.equal(await expenses(),before,'no se crea otro gasto');
+   const e=await expense(registered.expense_id);
+   assert.equal(e.payment_method,'debit_card');assert.equal(e.card_id,mcSantander);assert.equal(e.amount_text,'40.00');assert.equal(e.merchant,'Carrefour');
+   const c=await conversation(done.conversation_id);assert.equal(c.status,'confirmed');assert.equal(c.expense_id,registered.expense_id);
+   assert.equal(await active(),undefined);
+  });
+
+  await t.test('corrección inmediata de monto y comercio sobre el último gasto',async()=>{
+   isolate();
+   script.set('Perdón, fueron 45 mil',{amount:'45000',amountText:'45 mil'});
+   script.set('me equivoqué, fue en Disco',{merchant:'Disco'});
+   const registered=await say('Gasté 35 mil en Carrefour con Visa');
+   const before=await expenses();
+   const fix=await say('Perdón, fueron 45 mil');
+   assert.equal(fix.outcome,'corrected');assert.equal(lastReply(),'✏️ Corregido: $45.000 en Carrefour · Supermercado · Visa.');
+   assert.equal(await amountOf(registered.expense_id),'45000.00');
+   assert.equal((await conversation(fix.conversation_id)).status,'confirmed');
+   const moved=await say('me equivoqué, fue en Disco');
+   assert.equal(moved.outcome,'corrected');
+   const e=await expense(registered.expense_id);assert.equal(e.merchant,'Disco');assert.equal(e.amount_text,'45000.00');assert.equal(e.description,'Compra en Disco');
+   assert.equal(await expenses(),before);
+  });
+
+  await t.test('solo el último gasto del mismo integrante, dentro de la ventana',async()=>{
+   isolate();
+   const older=await say('Gasté 35 mil en Carrefour con Visa');
+   const latest=await say('Gasté 35 mil en Carrefour con Visa');
+   await say('Perdón, fueron 45 mil');
+   assert.equal(await amountOf(older.expense_id),'35000.00');assert.equal(await amountOf(latest.expense_id),'45000.00');
+   // Pasada la ventana (30 min) la corrección es una interacción nueva y no toca el gasto.
+   const late=await say('Perdón, fueron 45 mil',{at:clock+31*60000});
+   assert.notEqual(late.outcome,'corrected');assert.equal(calls.at(-1)!.conversation,undefined);
+   await say('cancelar');
+   // El gasto de otro integrante nunca se corrige.
+   isolate();
+   const beto=await say('Gasté 35 mil en Carrefour con Visa',{from:BETO});
+   const ana=await say('Perdón, fueron 45 mil');
+   assert.notEqual(ana.outcome,'corrected');assert.equal(await amountOf(beto.expense_id),'35000.00');
+   await say('cancelar');await q("UPDATE appgastos.whatsapp_conversations SET status='cancelled',closed_at=now() WHERE status='active'");
+  });
+
+  await t.test('sin frase de corrección es un gasto nuevo; gasto borrado no se corrige; cancelar la corrección',async()=>{
+   isolate();
+   const registered=await say('Gasté 35 mil en Carrefour con Visa');
+   const fresh=await say('Compré en Carrefour');
+   assert.equal(fresh.outcome,'question');assert.equal((await active()).draft.editingExpenseId,undefined);
+   await say('cancelar');assert.equal(await amountOf(registered.expense_id),'35000.00');
+   isolate();
+   script.set('Gasté 35 mil en Carrefour en efectivo',{...carrefour,amount:'35000',amountText:'35 mil',paymentMethod:'cash',paymentMethodText:'efectivo'});
+   const pending=await say('Gasté 35 mil en Carrefour en efectivo');
+   await say('perdón fue con tarjeta');
+   const cancelled=await say('cancelar');
+   assert.equal(cancelled.outcome,'cancelled');assert.equal(lastReply(),'Listo, cancelé la corrección. El gasto quedó como estaba.');
+   const e=await expense(pending.expense_id);assert.equal(e.payment_method,'cash');assert.equal(e.card_id,null);
+   // "fue con tarjeta" sobre un gasto que ya era con tarjeta no cambia nada: pide el dato concreto.
+   isolate();
+   await say('Gasté 35 mil en Carrefour con Visa');
+   const unclear=await say('perdón fue con tarjeta');
+   assert.equal(unclear.outcome,'unrecognized');assert.match(lastReply(),/^No entendí qué corregir del último gasto \(\$35\.000 en Carrefour\)/);
+   isolate();
+   const removed=await say('Gasté 35 mil en Carrefour con Visa');
+   await q('DELETE FROM appgastos.expenses WHERE id=$1',[removed.expense_id]);
+   const count=await expenses();
+   const after=await say('Perdón, fueron 45 mil');
+   assert.notEqual(after.outcome,'corrected');assert.equal(await expenses(),count);
+   await say('cancelar');
+  });
+
   await t.test('conversaciones de integrantes distintos son independientes',async()=>{
    await say('Compré en Carrefour',{from:BETO});
    const r=await say('Gasté 35 mil en Carrefour con Visa');

@@ -81,6 +81,12 @@ Nada se borra: las conversaciones cerradas quedan como auditoría.
 - Correcciones: un dato ya cargado solo cambia con una frase de corrección ("perdón",
   "me equivoqué", "en realidad", "corrijo", "no fue X, fue Y"). Sin esa frase, un dato cargado se
   ignora; dos o más datos cargados distintos son otro gasto: se informa el pendiente y no se mezcla.
+- Corrección de un gasto YA registrado: si no hay conversación abierta, el mensaje tiene frase de
+  corrección y el último gasto que ese integrante registró por WhatsApp es de hace menos del TTL
+  (30 min por defecto), se corrige ESE gasto con el servicio central (nunca se crea otro). Responde
+  "✏️ Corregido: …". "Perdón, fue con tarjeta" sin crédito/débito vuelve a preguntar el medio y la
+  tarjeta. Gastos anteriores al último, de otro integrante, borrados o fuera de la ventana no se tocan.
+  "cancelar" durante la corrección deja el gasto como estaba.
 - Cancelación: el mensaje empieza con cancelar, cancelá, no lo cargues, olvidalo, dejalo.
 - Tres respuestas incomprensibles seguidas cancelan la conversación con aviso.
 - Vencimiento: se evalúa con la hora del siguiente mensaje; la conversación queda expired y ese

@@ -12,6 +12,12 @@ export function isCancel(text:string):boolean{return CANCEL.test(clean(text));}
 const CORRECTION=/\b(perdon|me equivoque|me confundi|en realidad|corrijo|correccion|no fue|no era)\b/;
 export function hasCorrectionMarker(text:string):boolean{return CORRECTION.test(clean(text));}
 
+// "perdón, fue con tarjeta": corrige el medio a tarjeta sin decir crédito/débito ni cuál.
+// El medio anterior deja de valer y se vuelve a preguntar; nunca se elige crédito o débito por defecto.
+export function genericCardCorrection(text:string,cards:CardEntry[]):boolean{
+ return hasCorrectionMarker(text)&&/\btarjeta\b/.test(clean(text))&&paymentEvidence(text)===null&&cardNamed(text,cards)===null;
+}
+
 export type Intent='answer'|'correct'|'conflict'|'unknown';
 // Clasifica un parche ya validado frente al borrador actual.
 // - campo vacío: siempre se completa;

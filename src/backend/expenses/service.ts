@@ -41,9 +41,11 @@ export function expenseService(pool: Pool, familyId: string) {
       };
       return connection ? create(connection) : transaction(pool,create);
     },
-    async update(id: string, body: unknown) {
+    // connection: transacción del llamador (p. ej. el bot); sin ella se abre una propia.
+    async update(id: string, body: unknown, connection?: Connection) {
       uuid(id);
-      return transaction(pool,async (db) => {
+      const run = <T,>(work: (db: Connection) => Promise<T>) => connection ? work(connection) : transaction(pool,work);
+      return run(async (db) => {
         await db.query('SELECT id FROM appgastos.expenses WHERE family_id=$1 AND id=$2 FOR UPDATE',[familyId,id]);
         const previous = await findExpense(db,familyId,id);
         if (!previous) throw new ApiError(404,'Gasto inexistente.');

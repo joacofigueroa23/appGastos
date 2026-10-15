@@ -19,6 +19,7 @@ export interface ExpenseDraft{
  card?:Evidenced<string|null>;        // id de tarjeta; null = "ninguna"
  require?:DraftField[];               // campos con error que exigen una respuesta explícita
  options?:(string|null)[];            // ids de la última lista numerada; null = "Ninguna"
+ editingExpenseId?:string;            // corrección de un gasto ya registrado: al completar se edita, no se crea
 }
 export type PatchField='amount'|'currency'|'date'|'merchant'|'description'|'category'|'paymentMethod'|'card';
 export type DraftPatch=Partial<Pick<ExpenseDraft,PatchField>>;
