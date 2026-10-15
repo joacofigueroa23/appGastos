@@ -64,6 +64,13 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
   assert.equal(validateExpenseCandidate({...base,paymentMethod:'cash',paymentMethodText:'efectivo'},{...context,text:'Gasté 35000 en Carrefour con Visa efectivo',cards:[{...card,cardType:'credit_card'}]}).valid,false);
   assert.equal(validateExpenseCandidate(plain,{...context,text,cards:[{...card,cardType:'credit_card',active:false}]}).valid,false);
   assert.equal(validateExpenseCandidate(plain,{...context,text,cards:[{...card,cardType:'credit_card'},{...card,id:randomUUID(),name:'Visa banco',cardType:'credit_card'}]}).valid,false);
+  // Medio adivinado por el modelo desde el nombre de la tarjeta: se descarta y decide el tipo configurado.
+  const guessed={...base,paymentMethod:'credit_card' as const,paymentMethodText:'Visa'};
+  assert.equal(validateExpenseCandidate(guessed,{...context,text,cards:[{...card,cardType:'debit_card'}]}).expense!.paymentMethod,'debit_card');
+  assert.equal(validateExpenseCandidate(guessed,{...context,text}).valid,false);
+  assert.ok(validateExpenseCandidate({...guessed,card:null},{...context,text:'Gasté 35000 en Carrefour'}).missingFields.includes('medio de pago'));
+  // Con una palabra de pago en el texto, un respaldo incorrecto sigue siendo error.
+  assert.equal(validateExpenseCandidate(guessed,{...context,text:text+' débito',cards:[{...card,cardType:'debit_card'}]}).valid,false);
  });
  await t.test('moneda familiar y explícita sin depender del modelo',()=>{
   const usd=validateExpenseCandidate({...base,currency:'USD',currencyText:'USD'},{...context,text:context.text+' USD'});
@@ -92,6 +99,35 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
    assert.equal(r.valid,true);assert.equal(r.expense!.amount,expected);
   }
  });
+ await t.test('montos coloquiales: mil, k y lucas',()=>{
+  for(const [input,expected] of [['15 mil','15000.00'],['15mil','15000.00'],['15k','15000.00'],['1,5 mil','1500.00'],['2 lucas','2000.00'],['$15 mil','15000.00'],['u$s 100','100.00']])
+   assert.equal(normalizeTextAmount(input),expected,input);
+  for(const input of ['15 milanesas','mil','k'])assert.equal(normalizeTextAmount(input),null,input);
+  const r=validateExpenseCandidate({...base,amount:'15000',amountText:'15 mil'},{...context,text:'Gasté 15 Mil en Carrefour con Visa crédito'});
+  assert.equal(r.valid,true);assert.equal(r.expense!.amount,'15000.00');
+  assert.equal(validateExpenseCandidate({...base,amount:'15',amountText:'15 mil'},{...context,text:'Gasté 15 mil en Carrefour con Visa crédito'}).valid,false);
+ });
+ await t.test('pesos y $ son moneda local; u$s es USD explícito',()=>{
+  const text='Gasté 35000 pesos en Carrefour con Visa crédito';
+  assert.equal(validateExpenseCandidate({...base,currency:'ARS',currencyText:'pesos'},{...context,text}).expense!.currency,'ARS');
+  assert.equal(validateExpenseCandidate({...base,currency:'ARS',currencyText:'pesos uruguayos'},{...context,text:text.replace('pesos','pesos uruguayos')}).valid,false);
+  assert.equal(validateExpenseCandidate({...base,currency:'ARS',currencyText:'$',amountText:'35000'},{...context,text:'Gasté $35000 en Carrefour con Visa crédito'}).valid,true);
+  assert.equal(validateExpenseCandidate({...base,currency:'USD',currencyText:'$'},{...context,text:'Gasté $35000 en Carrefour con Visa crédito'}).valid,false);
+  const usdText='Gasté u$s 35000 en Carrefour con Visa crédito';
+  assert.equal(validateExpenseCandidate(base,{...context,text:usdText}).valid,false);
+  assert.equal(validateExpenseCandidate({...base,currency:'USD',currencyText:'u$s'},{...context,text:usdText}).expense!.currency,'USD');
+ });
+ await t.test('transferencia conjugada; Mercado Pago, MP y QR son billetera, no tarjeta',()=>{
+  const transfer=validateExpenseCandidate({...base,card:null,paymentMethod:'transfer',paymentMethodText:'transferí'},{...context,text:'Le transferí 35000 a Carrefour'});
+  assert.equal(transfer.valid,true);assert.equal(transfer.expense!.paymentMethod,'transfer');
+  const mpCard={id:randomUUID(),name:'mercado pago',active:false,cardType:'debit_card' as const};
+  for(const word of ['mercado pago','Mercado Pago','MP','QR']){
+   const r=validateExpenseCandidate({...base,card:null,paymentMethod:'wallet',paymentMethodText:word},{...context,text:'Gasté 35000 en Carrefour con '+word,cards:[card,mpCard]});
+   assert.equal(r.valid,true,word);assert.equal(r.expense!.paymentMethod,'wallet');assert.equal(r.expense!.cardId,null);
+  }
+  // Una tarjeta real mencionada sigue sin poder desaparecer.
+  assert.equal(validateExpenseCandidate({...base,card:null,paymentMethod:'wallet',paymentMethodText:'mercado pago'},{...context,text:'Gasté 35000 con Visa y mercado pago'}).valid,false);
+ });
  await t.test('hoy, ayer, ISO, día/mes y fecha en español; sin desplazamiento UTC',()=>{
   assert.equal(referenceDate(new Date('2026-10-12T01:00:00Z')),'2026-10-11');
   assert.equal(resolveDate('ayer','2026-01-01'),'2025-12-31');
@@ -118,6 +154,10 @@ test('Candidato: validación determinista, fechas, monedas y ausencia de fallbac
    used.length=0;
    await assert.rejects(geminiInterpreter(async p=>{used.push(p.model);throw {status:400};})(context),(e:any)=>e.message==='failed');
    assert.deepEqual(used,['saturado']);
+   // El detalle técnico permite diagnosticar sin guardar el texto.
+   await assert.rejects(geminiInterpreter(async()=>{throw {status:404};})(context),(e:any)=>e.message==='failed'&&e.detail==='http_404');
+   await assert.rejects(geminiInterpreter(async()=>{throw {status:503};})(context),(e:any)=>e.message==='transient'&&e.detail==='http_503');
+   await assert.rejects(geminiInterpreter(async()=>({text:'{x'}))(context),(e:any)=>e.message==='invalid_output'&&e.detail==='json');
   }finally{if(previousModel===undefined)delete process.env.GEMINI_MODEL;else process.env.GEMINI_MODEL=previousModel;}
   if(previous===undefined)delete process.env.GEMINI_API_KEY;
  });
@@ -223,8 +263,10 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
    extraction=base;
   });
   await t.test('Gemini fallido y salida inválida producen error controlado',async()=>{
-   failInterpret=true;assert.equal((await incoming('ai-down')).outcome,'interpretation_error');failInterpret=false;
-   extraction={amount:5};assert.equal((await incoming('ai-invalid')).outcome,'interpretation_error');extraction=base;
+   failInterpret=true;const down=await incoming('ai-down');failInterpret=false;
+   assert.equal(down.outcome,'interpretation_error');assert.equal(down.last_error,'interpretation_unknown');
+   extraction={amount:5};const invalid=await incoming('ai-invalid');extraction=base;
+   assert.equal(invalid.outcome,'interpretation_error');assert.equal(invalid.last_error,'interpretation_invalid_output');
    assert.doesNotMatch(replies.at(-1)!.text,/^Registrado:/);
   });
   await t.test('Gemini con fallo pasajero reintenta y solo informa al agotar intentos',async()=>{

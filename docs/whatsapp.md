@@ -37,6 +37,7 @@ Variables obligatorias para la conexión real:
 Opcionales:
 - APP_TIME_ZONE: America/Argentina/Buenos_Aires por defecto.
 - GEMINI_MODEL: lista separada por comas; ante sobrecarga (503/429/timeout) se prueba el siguiente. Por defecto gemini-3.5-flash-lite,gemini-3.1-flash-lite.
+  Configurar un único modelo desactiva el respaldo: usar al menos dos (ver .env.example).
 - WHATSAPP_GRAPH_VERSION: v21.0 por defecto; usar una versión habilitada en tu aplicación.
 
 No hay una API web que permita cambiar credenciales reales. GET /api/whatsapp/config
@@ -106,6 +107,17 @@ Fechas no resolubles o inválidas requieren otro mensaje completo; no se reempla
 Moneda ausente: families.default_currency. Moneda explícita: código válido o alias reconocido.
 No depende de que Gemini complete defaults. Si el texto contiene fechas o monedas
 explícitas contradictorias, se rechaza aunque el modelo seleccione solamente una.
+
+Expresiones coloquiales aceptadas:
+- Montos: "15 mil", "15k", "2 lucas", "1,5 mil" (multiplican por mil, con evidencia literal).
+- Moneda: "pesos" sin otra nacionalidad es ARS; "$" es la moneda de la familia; "u$s" es USD explícito.
+- Medio: "transferí"/"transferido" es transferencia. Mercado Pago, MP, QR y billetera son
+  billetera virtual (wallet), nunca tarjeta. Una tarjeta llamada "mercado pago" debe desactivarse.
+- Si el texto no contiene ninguna palabra de pago, un medio propuesto por el modelo se descarta
+  (no se usa) y decide el tipo configurado de la tarjeta; si no hay, falta el medio de pago.
+
+Diagnóstico: last_error guarda solo códigos técnicos, por ejemplo
+interpretation_failed:http_404, interpretation_transient:http_503 o interpretation_invalid_output:schema.
 
 Si falta información, la respuesta enumera faltantes/errores y no crea el gasto.
 Si Gemini falta, falla o devuelve una salida incompatible, se responde error controlado.

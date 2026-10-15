@@ -14,7 +14,7 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
   try{
-   let reply='',outcome='interpretation_error',ctx:InterpretationContext|undefined;
+   let reply='',outcome='interpretation_error',lastError:string|null=null,ctx:InterpretationContext|undefined;
    let validated:ReturnType<typeof validateExpenseCandidate>|undefined;
    if(row.message_type!=='text'){reply='Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.';outcome='unsupported';}
    else{
@@ -34,6 +34,9 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
       reply=transient?'El servicio de interpretación no está disponible ahora. No se registró ningún gasto; reenvía el mensaje en unos minutos.':
        'No pude interpretar el mensaje. No se registró ningún gasto; intenta con un texto completo o usa la carga manual.';
       outcome='interpretation_error';
+      // Solo códigos técnicos (ej. interpretation_failed:http_404), nunca texto del mensaje.
+      lastError=error instanceof InterpretationError?'interpretation_'+error.message+(error.detail?':'+error.detail:''):'interpretation_unknown';
+      console.warn('whatsapp: '+lastError);
      }
      if(validated){
       if(validated.valid){outcome='registered';}
@@ -65,8 +68,8 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
       }
      }
     }
-    await db.query("UPDATE appgastos.whatsapp_messages SET state='completed',outcome=$3,expense_id=$4,reply_text=$5,completed_at=now(),text_body=NULL,lease_token=NULL,lease_until=NULL,last_error=NULL WHERE message_id=$1 AND lease_token=$2",
-     [row.message_id,row.lease_token,outcome,expenseId,reply]);
+    await db.query("UPDATE appgastos.whatsapp_messages SET state='completed',outcome=$3,expense_id=$4,reply_text=$5,completed_at=now(),text_body=NULL,lease_token=NULL,lease_until=NULL,last_error=$6 WHERE message_id=$1 AND lease_token=$2",
+     [row.message_id,row.lease_token,outcome,expenseId,reply,lastError]);
    });
   }catch(error){
    const code=error instanceof InterpretationError?'interpretation_retry':'processing_failed';
@@ -79,7 +82,7 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
   const row=await claim(pool,true);if(!row)return false;
   try{
    await send(row.sender,row.reply_text);
-   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state='sent',reply_lease_token=NULL,reply_lease_until=NULL,last_error=NULL WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token]);
+   await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state='sent',reply_lease_token=NULL,reply_lease_until=NULL,last_error=CASE WHEN last_error='reply_failed' THEN NULL ELSE last_error END WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token]);
   }catch{
    await pool.query("UPDATE appgastos.whatsapp_messages SET reply_state=$3,reply_lease_token=NULL,reply_lease_until=NULL,last_error='reply_failed',reply_next_attempt_at=now()+interval '30 seconds' WHERE message_id=$1 AND reply_lease_token=$2",[row.message_id,row.reply_lease_token,row.reply_attempts>=5?'failed':'pending']);
    console.warn('whatsapp: reply_failed');

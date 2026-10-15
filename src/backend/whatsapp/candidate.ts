@@ -20,7 +20,10 @@ export interface InterpretationContext {
  text:string;referenceDate:string;defaultCurrency:string;
  categories:CatalogEntry[];cards:CardEntry[];member:CatalogEntry;
 }
-export class InterpretationError extends Error {}
+// detail: código técnico sin datos del mensaje (ej. http_404), para diagnosticar sin adivinar.
+export class InterpretationError extends Error {constructor(message:string,public detail?:string){super(message);}}
+// Billeteras virtuales (QR o transferencia desde la app): nunca son tarjeta.
+const WALLET=/\b(billetera|mercado ?pago|mp|qr)\b/;
 const keys=['amount','amountText','dateText','currency','currencyText','merchant','description','category','paymentMethod','paymentMethodText','card'] as const;
 export function parseInterpretation(raw:unknown):Interpretation {
  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new InterpretationError('invalid_output');
@@ -52,14 +55,23 @@ export function resolveDate(value:string|null,reference:string):string|null{
  return out&&isDateOnly(out)?out:null;
 }
 export function normalizeTextAmount(raw:string):string|null{
- let s=raw.trim().replace(/^(?:ARS|USD|EUR|\$)\s*/i,'').replace(/\s*(?:ARS|USD|EUR)$/i,'');
+ let s=raw.trim().replace(/^(?:ARS|USD|EUR|U\$S|US\$|\$)\s*/i,'').replace(/\s*(?:ARS|USD|EUR)$/i,'');
+ // Multiplicador coloquial de miles: "15 mil", "15k", "2 lucas", "1,5 mil".
+ const thousands=s.match(/^(.+?)\s*(?:mil|k|lucas?)$/i);
+ if(thousands)s=thousands[1];
  if(/^(?:\d{1,3}(?:\.\d{3})+),\d{1,2}$/.test(s))s=s.replace(/\./g,'').replace(',','.');
  else if(/^\d+,\d{1,2}$/.test(s))s=s.replace(',','.');
  else if(/^\d{1,3}(?:\.\d{3})+$/.test(s))s=s.replace(/\./g,'');
- try{return normalizeAmount(s);}catch{return null;}
+ try{
+  const n=normalizeAmount(s);
+  if(!thousands)return n;
+  const cents=BigInt(n.replace('.',''))*1000n;
+  return normalizeAmount((cents/100n).toString()+'.'+(cents%100n).toString().padStart(2,'0'));
+ }catch{return null;}
 }
-function amountEvidence(message:string,fragment:string|null):boolean{
- if(!fragment)return false;
+function amountEvidence(rawMessage:string,rawFragment:string|null):boolean{
+ if(!rawFragment)return false;
+ const message=rawMessage.toLowerCase(),fragment=rawFragment.toLowerCase();
  let start=message.indexOf(fragment);
  while(start>=0){
   const before=message[start-1]||'',after=message[start+fragment.length]||'';
@@ -74,8 +86,8 @@ function paymentEvidence(s:string):PaymentCode|null {
  if(/\bcredito\b/.test(t))return 'credit_card';
  if(/\bdebito\b/.test(t))return 'debit_card';
  if(/\befectivo\b/.test(t))return 'cash';
- if(/\btransferencia\b/.test(t))return 'transfer';
- if(/\b(billetera|mercado pago|mercadopago)\b/.test(t))return 'wallet';
+ if(/\btransfer(encia|i|ido|ida)?\b/.test(t))return 'transfer';
+ if(WALLET.test(t))return 'wallet';
  if(/\botro medio\b/.test(t))return 'other';
  return null;
 }
@@ -97,18 +109,20 @@ export function validateExpenseCandidate(raw:Interpretation,ctx:InterpretationCo
   if(!evidence(raw.amountText)||!amountEvidence(ctx.text,raw.amountText)||normalizeTextAmount(raw.amountText||'')!==amount)validationErrors.push('monto sin respaldo en el mensaje');
  }
  const currencyCodes=Intl.supportedValuesOf('currency');
- const explicitCurrency=ctx.text.match(new RegExp('\\b('+currencyCodes.join('|')+')\\b|d[oó]lares|euros|pesos argentinos|reales|libras','gi'));
+ const explicitCurrency=ctx.text.match(new RegExp('\\b('+currencyCodes.join('|')+')\\b|d[oó]lares|u\\$s|us\\$|euros|pesos argentinos|reales|libras','gi'));
  const currencyCode=(value:string)=>{
   const label=normalizeName(value);
   return currencyCodes.includes(label.toUpperCase())?label.toUpperCase():
-   label==='dolares'?'USD':label==='euros'?'EUR':label==='pesos argentinos'?'ARS':label==='reales'?'BRL':label==='libras'?'GBP':null;
+   label==='dolares'||label==='u$s'||label==='us$'?'USD':label==='euros'?'EUR':label==='pesos argentinos'?'ARS':label==='reales'?'BRL':label==='libras'?'GBP':null;
  };
  let currency=raw.currency??ctx.defaultCurrency;
  if(raw.currency!==null){
   if(!evidence(raw.currencyText))validationErrors.push('moneda sin respaldo en el mensaje');
   const label=normalizeName(raw.currencyText||'');
   const inferred=label.match(new RegExp('\\b('+currencyCodes.join('|')+')\\b','i'))?.[0].toUpperCase()||
-   (/dolares/.test(label)?'USD':/euros/.test(label)?'EUR':/pesos argentinos/.test(label)?'ARS':/reales/.test(label)?'BRL':/libras/.test(label)?'GBP':null);
+   (/dolares|u\$s|us\$/.test(label)?'USD':/euros/.test(label)?'EUR':/pesos argentinos/.test(label)?'ARS':/reales/.test(label)?'BRL':/libras/.test(label)?'GBP':
+    // "pesos" solo, sin otra nacionalidad, es ARS; "$" es la moneda de la familia.
+    /\bpesos?\b/.test(label)&&!/pesos? (uruguayos|chilenos|mexicanos|colombianos)/.test(label)?'ARS':label==='$'?ctx.defaultCurrency:null);
   if(inferred!==currency)validationErrors.push('moneda explícita ambigua');
  }else if(explicitCurrency)validationErrors.push('moneda explícita sin resolver');
  if(explicitCurrency?.some(label=>currencyCode(label)!==currency))validationErrors.push('monedas explícitas contradictorias o sin resolver');
@@ -122,9 +136,14 @@ export function validateExpenseCandidate(raw:Interpretation,ctx:InterpretationCo
   if(found.length!==1)validationErrors.push('categoría inexistente, inactiva o ambigua');else categoryId=found[0].id;
  }
  let paymentMethod=raw.paymentMethod;
- if(paymentMethod&&(!evidence(raw.paymentMethodText)||paymentEvidence(raw.paymentMethodText||'')!==paymentMethod||(/\bcredito\b/.test(normalizeName(ctx.text))&&/\bdebito\b/.test(normalizeName(ctx.text)))))validationErrors.push('medio de pago sin respaldo o ambiguo');
+ const bothCardKinds=/\bcredito\b/.test(normalizeName(ctx.text))&&/\bdebito\b/.test(normalizeName(ctx.text));
+ const backed=evidence(raw.paymentMethodText)&&paymentEvidence(raw.paymentMethodText||'')===paymentMethod;
+ // Sin ninguna palabra de pago en el texto, el medio del modelo es una suposición: se descarta (no se usa).
+ if(paymentMethod&&!backed&&!bothCardKinds&&paymentEvidence(ctx.text)===null)paymentMethod=null;
+ else if(paymentMethod&&(!backed||bothCardKinds))validationErrors.push('medio de pago sin respaldo o ambiguo');
  // A mentioned known card must not disappear from the interpretation.
- const mentionedCards=ctx.cards.filter(c=>normalizeName(ctx.text).includes(normalizeName(c.name)));
+ // Excepción: una "tarjeta" con nombre de billetera (ej. Mercado Pago) pagada como billetera.
+ const mentionedCards=ctx.cards.filter(c=>normalizeName(ctx.text).includes(normalizeName(c.name))&&!(paymentMethod==='wallet'&&WALLET.test(normalizeName(c.name))));
  if(!raw.card&&(mentionedCards.length||/\b(visa|mastercard|amex)\b/i.test(ctx.text)))validationErrors.push('tarjeta mencionada sin resolver');
  if(raw.card){
   if(!evidence(raw.card))validationErrors.push('tarjeta sin respaldo en el mensaje');
