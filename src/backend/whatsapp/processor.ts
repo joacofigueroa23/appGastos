@@ -232,6 +232,11 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
   }catch(error){
    const changed=error instanceof ConversationChanged;
    const code=error instanceof InterpretationError?'interpretation_retry':changed?'conversation_changed':'processing_failed';
+   // Sin tope un mensaje que siempre falla bloquearía a los siguientes del mismo remitente.
+   if(code==='processing_failed'&&row.attempts>=MAX_INTERPRETATION_ATTEMPTS){
+    await pool.query("UPDATE appgastos.whatsapp_messages SET state='completed',outcome='unsupported',last_error=$3,reply_text=$4,completed_at=now(),text_body=NULL,lease_token=NULL,lease_until=NULL WHERE message_id=$1 AND state='processing' AND lease_token=$2",[row.message_id,row.lease_token,code,REPLIES.failed]);
+    console.warn('whatsapp: '+code+'_gave_up');return true;
+   }
    await pool.query("UPDATE appgastos.whatsapp_messages SET state='pending',lease_token=NULL,lease_until=NULL,last_error=$3,next_attempt_at=now()+($4||' seconds')::interval WHERE message_id=$1 AND state='processing' AND lease_token=$2",[row.message_id,row.lease_token,code,changed?'0':'15']);
    console.warn('whatsapp: '+code);
   }

@@ -64,6 +64,7 @@ export const REPLIES={
  unavailable:'El servicio de interpretación no está disponible ahora. ',
  keptDraft:'El gasto pendiente sigue guardado. ',
  notRegistered:'No se registró ningún gasto; ',
+ failed:'No pude procesar tu mensaje. Intenta de nuevo con otro texto o usa la carga manual.',
  unsupported:'Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.',
  unauthorized:'Este número no está autorizado para registrar gastos. Revisa su configuración con la familia.',
  noLongerAuthorized:'Este número ya no está autorizado. No se registró el gasto.',

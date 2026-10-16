@@ -307,6 +307,23 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
     await proc.replyNext();assert.match(replies.at(-1)!.text,/no está disponible/);
    }finally{transientInterpret=false;}
   });
+  await t.test('un mensaje que siempre falla se descarta a los 5 intentos y no bloquea al siguiente del remitente',async()=>{
+   // Falla la transacción de commit (bloqueo de la fila); el resto del pool es real.
+   const broken=new Proxy(db.pool,{get(target:any,key){
+    if(key!=='connect')return typeof target[key]==='function'?target[key].bind(target):target[key];
+    return async()=>{const c=await target.connect();const q=c.query.bind(c),release=c.release.bind(c);c.release=(e?:any)=>{c.query=q;c.release=release;release(e);};c.query=(sql:any,...a:any[])=>String(sql).includes('FOR UPDATE')&&String(sql).includes('whatsapp_messages')?Promise.reject(new Error('boom')):q(sql,...a);return c;};
+   }}) as typeof db.pool;
+   const bad=whatsappProcessor(broken,interpreter,send);
+   await enqueue(db.pool,INITIAL_FAMILY_ID,[{id:'stuck',sender:'5491144445555',text:context.text,type:'text',receivedAt:new Date('2026-10-11T15:00:00Z')},
+    {id:'after-stuck',sender:'5491144445555',text:'cancelar',type:'text',receivedAt:new Date('2026-10-11T15:00:01Z')}]);
+   for(let n=0;n<5;n++){await db.pool.query("UPDATE appgastos.whatsapp_messages SET next_attempt_at=now() WHERE message_id='stuck'");await bad.processNext();}
+   const stuck=(await db.pool.query("SELECT * FROM appgastos.whatsapp_messages WHERE message_id='stuck'")).rows[0];
+   assert.equal(stuck.state,'completed');assert.equal(stuck.outcome,'unsupported');assert.equal(stuck.last_error,'processing_failed');assert.equal(stuck.attempts,5);
+   await proc.processNext();
+   const next=(await db.pool.query("SELECT * FROM appgastos.whatsapp_messages WHERE message_id='after-stuck'")).rows[0];
+   assert.equal(next.state,'completed');assert.equal(next.outcome,'nothing_to_cancel');
+   await proc.replyNext();await proc.replyNext();
+  });
   await t.test('imagen/audio/documento/video nunca se interpretan ni registran',async()=>{
    const before=calls;
    for(const type of ['image','audio','document','video'])assert.equal((await incoming('media-'+type,'caption','5491144445555',type)).outcome,'unsupported');
