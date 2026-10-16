@@ -117,6 +117,7 @@ npm run build
 npm run test:browser
 npm run test:legacy-browser
 ```
+Producción: `npm run build && npm start` (start fuerza NODE_ENV=production y exige APP_AUTH_USER/APP_AUTH_PASSWORD).
 Los requisitos y comandos de demo, migración, seed, producción y Supabase están detallados en [docs/postgresql.md](docs/postgresql.md).
 
 

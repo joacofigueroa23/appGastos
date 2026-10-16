@@ -10,6 +10,8 @@ import { registerWhatsApp } from './src/backend/whatsapp/routes';
 import { authFromEnv } from './src/backend/auth';
 
 dotenv.config();
+// `npm start` pasa --production: evita servir Vite (código fuente) sin NODE_ENV, sin depender de cross-env en Windows.
+if (process.argv.includes('--production')) process.env.NODE_ENV = 'production';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

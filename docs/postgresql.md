@@ -65,15 +65,13 @@ Para el ejemplo del usuario:
 6. En el dashboard seleccionar 2026-10 y ARS: total 40.000,00 si no existen otros gastos para ese mes.
 7. Recargar. Los gastos vuelven a consultarse desde PostgreSQL.
 
-Producción local con assets compilados:
+Producción local con assets compilados (`npm start` fuerza NODE_ENV=production y sirve dist/):
 
 ```powershell
-npm run build
-$env:NODE_ENV="production"
-npm start
+npm run build && npm start
 ```
 
-Para volver a desarrollo, quitar NODE_ENV de la sesión o asignar development.
+Para desarrollo con Vite usar `npm run dev`.
 La API y el frontend piden Basic Auth con APP_AUTH_USER y APP_AUTH_PASSWORD (el navegador pregunta una vez). Con NODE_ENV=production el servidor no arranca sin ellas. Solo /api/whatsapp/webhook queda exento: valida la firma de Meta. Nunca usar variables VITE_* para esto: quedarían en el JavaScript público.
 
 ## Migraciones y seed
