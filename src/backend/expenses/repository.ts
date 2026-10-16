@@ -21,6 +21,7 @@ export async function findExpense(db: Connection, familyId: string, id: string):
   const result = await db.query('SELECT ' + columns + ' FROM appgastos.expenses e JOIN appgastos.categories c ON c.id=e.category_id WHERE e.family_id=$1 AND e.id=$2', [familyId,id]);
   return result.rows[0] ? dto(result.rows[0]) : null;
 }
+// shortcut: sin paginación, paginar al pasar de ~5000 gastos
 export async function listExpenses(db: Connection, familyId: string, query: ExpenseFilters = {}): Promise<ApiExpense[]> {
   const args: unknown[] = [familyId];
   let filters = '';
