@@ -11,6 +11,7 @@ import { todayDateOnly } from './src/utils/finance';
 import { createDatabasePool } from './src/backend/db/pool';
 import { registerDatabaseApi } from './src/backend/expenses/routes';
 import { registerWhatsApp } from './src/backend/whatsapp/routes';
+import { authFromEnv } from './src/backend/auth';
 
 dotenv.config();
 
@@ -19,6 +20,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const auth = authFromEnv();
+if (auth) app.use(auth);
 
 const databasePool = process.env.DATABASE_URL ? createDatabasePool(process.env.DATABASE_URL) : null;
 if (process.env.VITE_ENABLE_DEMO !== 'true') {

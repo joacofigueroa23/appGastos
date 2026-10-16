@@ -23,6 +23,8 @@ Ejemplo de configuración SIN credenciales reales:
 PORT=3000
 DATABASE_URL=postgresql://USUARIO:CONTRASENA_URL_ENCODED@HOST:5432/postgres
 APP_FAMILY_ID=00000000-0000-4000-8000-000000000001
+APP_AUTH_USER=elegir-usuario
+APP_AUTH_PASSWORD=elegir-clave-larga
 SEED_FAMILY_NAME=Familia
 # Opcional: crea un integrante que configures explícitamente.
 # SEED_MEMBER_NAME=Nombre elegido
@@ -72,7 +74,7 @@ npm start
 ```
 
 Para volver a desarrollo, quitar NODE_ENV de la sesión o asignar development.
-Todavía no hay autenticación; esta etapa requiere acceso controlado al servidor. No publicar una API de escritura abierta.
+La API y el frontend piden Basic Auth con APP_AUTH_USER y APP_AUTH_PASSWORD (el navegador pregunta una vez). Con NODE_ENV=production el servidor no arranca sin ellas. Solo /api/whatsapp/webhook queda exento: valida la firma de Meta. Nunca usar variables VITE_* para esto: quedarían en el JavaScript público.
 
 ## Migraciones y seed
 
