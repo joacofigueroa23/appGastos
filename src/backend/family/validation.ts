@@ -1,5 +1,6 @@
 
-import {ApiError,object,text} from '../expenses/validation';
+import {ApiError} from '../shared/errors';
+import {object,text} from '../shared/validators';
 import {CARD_TYPES,type CardType} from '../../shared/apiTypes';
 export type ReferenceKind = 'cards' | 'family_members';
 export interface ReferenceChanges {name?:string;active?:boolean;phoneNumber?:string|null;cardType?:CardType|null}

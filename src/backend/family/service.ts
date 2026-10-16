@@ -1,6 +1,7 @@
 
 import type {Pool} from 'pg';
-import {ApiError,uuid} from '../expenses/validation';
+import {ApiError} from '../shared/errors';
+import {uuid} from '../shared/validators';
 import {validateReference,type ReferenceKind} from './validation';
 import {insertReference,listReferences,updateReference} from './repository';
 export function referenceService(pool:Pool,family:string,kind:ReferenceKind){

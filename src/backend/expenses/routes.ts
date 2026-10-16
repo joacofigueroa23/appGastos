@@ -1,7 +1,8 @@
 import type { Express, Request, Response, NextFunction } from 'express';
 import type { Pool } from 'pg';
 import { expenseService, resolveFamilyId } from './service';
-import { ApiError, validateExpenseFilters } from './validation';
+import { validateExpenseFilters } from './validation';
+import { ApiError } from '../shared/errors';
 import {referenceService} from '../family/service';
 
 export function registerDatabaseApi(app: Express, pool: Pool | null, familyOverride?: string): void {

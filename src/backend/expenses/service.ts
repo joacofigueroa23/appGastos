@@ -1,5 +1,7 @@
 import type { Pool } from 'pg';
-import { ApiError, uuid, validateExpenseWrite } from './validation';
+import { validateExpenseWrite } from './validation';
+import { ApiError } from '../shared/errors';
+import { uuid } from '../shared/validators';
 import { findExpense, insertExpense, listExpenses, transaction, updateExpense, type Connection } from './repository';
 import type { ApiExpense, ExpenseWrite, ExpenseFilters } from '../../shared/apiTypes';
 

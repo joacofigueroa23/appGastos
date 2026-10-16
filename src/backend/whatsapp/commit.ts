@@ -1,6 +1,6 @@
 import type {Pool,PoolClient} from 'pg';
 import {expenseService} from '../expenses/service';
-import {ApiError} from '../expenses/validation';
+import {ApiError} from '../shared/errors';
 import type {ExpenseDraft} from './draft';
 import {closeConversation,createConversation,expireConversations,failConversations,findActiveConversation,saveConversation,type Conversation} from './conversation';
 import {REPLIES,confirmation,draftSummary,fieldNotice,questionFor} from './replies';

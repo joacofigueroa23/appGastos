@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import { createDatabasePool } from '../src/backend/db/pool';
 import { EXPENSE_CATEGORIES } from '../src/data/financeCatalog';
 import { transaction } from '../src/backend/expenses/repository';
-import { text, uuid } from '../src/backend/expenses/validation';
+import { text, uuid } from '../src/backend/shared/validators';
 export const INITIAL_FAMILY_ID = '00000000-0000-4000-8000-000000000001';
 export async function seed(pool: Pool, familyId = INITIAL_FAMILY_ID, memberName?: string): Promise<void> {
   uuid(familyId);
