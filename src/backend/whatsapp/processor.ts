@@ -1,5 +1,6 @@
 import type {Pool} from 'pg';
 import {transaction} from '../expenses/repository';
+import {memberPhones} from '../family/repository';
 import {InterpretationError} from './candidate';
 import {findActiveConversation,type Conversation} from './conversation';
 import {REPLIES} from './replies';
@@ -18,7 +19,7 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
    let decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
    if(row.message_type!=='text')decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
    else{
-    const members=(await pool.query('SELECT id,name,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[row.family_id])).rows as Member[];
+    const members=(await memberPhones(pool,row.family_id)) as Member[];
     const matches=members.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender);
     if(matches.length!==1){
      // Un número que dejó de estar autorizado no continúa conversaciones; no se llama a Gemini.

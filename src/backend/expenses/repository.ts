@@ -47,3 +47,6 @@ export async function updateExpense(db: Connection, familyId: string, id: string
   await db.query('UPDATE appgastos.expenses SET date=$3,amount=$4,currency=$5,merchant=$6,description=$7,category_id=$8,payment_method=$9,card_id=$10,reported_by_member_id=$11 WHERE family_id=$1 AND id=$2',[familyId,id,...values(input)]);
   return (await findExpense(db,familyId,id))!;
 }
+export async function listCategories(db: Connection, familyId: string) {
+  return (await db.query('SELECT id,family_id AS "familyId",name,active,created_at AS "createdAt" FROM appgastos.categories WHERE family_id=$1 ORDER BY name,id',[familyId])).rows;
+}

@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from 'express';
 import type { Pool } from 'pg';
 import { expenseService, resolveFamilyId } from './service';
 import { validateExpenseFilters } from './validation';
+import { listCategories } from './repository';
 import { ApiError } from '../shared/errors';
 import {referenceService} from '../family/service';
 
@@ -30,8 +31,7 @@ export function registerDatabaseApi(app: Express, pool: Pool | null, familyOverr
     await expenseService(db,family).delete(req.params.id); res.sendStatus(204);
   }));
   app.get('/api/categories',route(async(_req,res,db,family)=>{
-    const result=await db.query('SELECT id,family_id AS "familyId",name,active,created_at AS "createdAt" FROM appgastos.categories WHERE family_id=$1 ORDER BY name,id',[family]);
-    res.json({categories:result.rows});
+    res.json({categories:await listCategories(db,family)});
   }));
   for(const [path,kind,listKey,itemKey] of [
     ['/api/cards','cards','cards','card'],

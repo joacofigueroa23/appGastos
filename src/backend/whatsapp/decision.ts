@@ -1,5 +1,6 @@
 import type {Pool} from 'pg';
 import {findExpense} from '../expenses/repository';
+import {catalogRows} from '../family/repository';
 import type {ApiExpense} from '../../shared/apiTypes';
 import {InterpretationError,parseInterpretation,referenceDate,validateDraft,validatePatch,type CardEntry,type CatalogEntry,type DraftValidation,type InterpretationContext} from './candidate';
 import {applyCandidatePatch,type DraftField,type DraftPatch,type ExpenseDraft} from './draft';
@@ -32,10 +33,8 @@ export function draftFromExpense(e:ApiExpense,today:string):ExpenseDraft{
 }
 
 export async function loadCatalog(pool:Pool,familyId:string,member:Member):Promise<Catalog>{
- const family=(await pool.query('SELECT default_currency FROM appgastos.families WHERE id=$1',[familyId])).rows[0];
- const categories=(await pool.query('SELECT id,name,active FROM appgastos.categories WHERE family_id=$1',[familyId])).rows as CatalogEntry[];
- const cards=(await pool.query('SELECT id,name,active,card_type AS "cardType" FROM appgastos.cards WHERE family_id=$1',[familyId])).rows as CardEntry[];
- return {familyCurrency:family.default_currency,categories,cards,member};
+ const {defaultCurrency,categories,cards}=await catalogRows(pool,familyId);
+ return {familyCurrency:defaultCurrency,categories,cards,member};
 }
 // Borrador con nombres reales para Gemini (sin ids ni datos ficticios).
 function namedDraft(draft:ExpenseDraft,catalog:Catalog):Record<string,string|null>{

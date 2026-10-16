@@ -26,3 +26,13 @@ export async function updateReference(pool:Pool,family:string,kind:ReferenceKind
  const r=await pool.query('UPDATE appgastos.'+kind+' SET '+sets.join(',')+' WHERE family_id=$1 AND id=$2 RETURNING '+columns(kind),args);
  return r.rows[0]?dto(r.rows[0]):null;
 }
+// Datos que el bot de WhatsApp le da a Gemini: moneda de la familia, categorías y tarjetas.
+export async function catalogRows(pool:Pool,family:string){
+ const familyRow=(await pool.query('SELECT default_currency FROM appgastos.families WHERE id=$1',[family])).rows[0];
+ const categories=(await pool.query('SELECT id,name,active FROM appgastos.categories WHERE family_id=$1',[family])).rows;
+ const cards=(await pool.query('SELECT id,name,active,card_type AS "cardType" FROM appgastos.cards WHERE family_id=$1',[family])).rows;
+ return {defaultCurrency:familyRow.default_currency as string,categories,cards};
+}
+export async function memberPhones(pool:Pool,family:string){
+ return (await pool.query('SELECT id,name,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[family])).rows;
+}
