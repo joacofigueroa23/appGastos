@@ -5,7 +5,16 @@ import { uuid } from '../shared/validators';
 import { findExpense, insertExpense, listExpenses, transaction, updateExpense, type Connection } from './repository';
 import type { ApiExpense, ExpenseWrite, ExpenseFilters } from '../../shared/apiTypes';
 
+// Cacheado por pool y valor de APP_FAMILY_ID: evita 1-2 consultas por request con pool de 1 conexión.
+const resolved = new WeakMap<Pool, { env: string | undefined; id: string }>();
 export async function resolveFamilyId(pool: Pool): Promise<string> {
+  const env = process.env.APP_FAMILY_ID, cached = resolved.get(pool);
+  if (cached && cached.env === env) return cached.id;
+  const id = await lookupFamilyId(pool);
+  resolved.set(pool, { env, id });
+  return id;
+}
+async function lookupFamilyId(pool: Pool): Promise<string> {
   if (process.env.APP_FAMILY_ID) {
     const id = uuid(process.env.APP_FAMILY_ID, 'APP_FAMILY_ID');
     if (!(await pool.query('SELECT id FROM appgastos.families WHERE id=$1',[id])).rowCount) throw new ApiError(503,'La familia configurada no existe. Ejecuta el seed.');
