@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
 import express from 'express';
 import {authFromEnv,basicAuth} from '../src/backend/auth';
 import {registerWhatsApp} from '../src/backend/whatsapp/routes';
@@ -22,4 +23,14 @@ test('Basic Auth protege /api y deja pasar el webhook',async()=>{
 test('en producción sin credenciales no arranca',()=>{
  assert.throws(()=>authFromEnv({NODE_ENV:'production'}),/APP_AUTH_USER/);
  assert.equal(authFromEnv({}),null);
+});
+test('demo + production: el simulador responde 410',async()=>{
+ const port=39000+Math.floor(Math.random()*500);
+ const child=spawn(process.execPath,['--import','tsx','server.ts'],{windowsHide:true,env:{...process.env,PORT:String(port),NODE_ENV:'production',VITE_ENABLE_DEMO:'true',DATABASE_URL:'',APP_AUTH_USER:'u',APP_AUTH_PASSWORD:'p',FRONTEND_DIST_DIR:'dist'}});
+ try{
+  const headers={Authorization:'Basic '+Buffer.from('u:p').toString('base64'),'Content-Type':'application/json'};
+  let res:Response|undefined;
+  for(let i=0;i<60&&!res;i++){try{res=await fetch(`http://127.0.0.1:${port}/api/whatsapp/simulate`,{method:'POST',headers,body:'{}'});}catch{await new Promise(r=>setTimeout(r,250));}}
+  assert.equal(res?.status,410);
+ }finally{child.kill();}
 });
