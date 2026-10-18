@@ -12,12 +12,14 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts tests/whatsapp-conversation.test.ts tests/auth.test.ts",
-    "test:browser": "node --import tsx --test tests/database-browser.test.ts tests/manual-core-browser.test.ts",
+    "db:member-account": "tsx scripts/member-account.ts",
+    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts tests/whatsapp-conversation.test.ts tests/auth.test.ts tests/accounts.test.ts",
+    "test:browser": "node --import tsx --test tests/database-browser.test.ts tests/manual-core-browser.test.ts tests/accounts-browser.test.ts",
     "test:legacy-browser": "tsx scripts/test-legacy-browser.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@supabase/supabase-js": "^2.118.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",

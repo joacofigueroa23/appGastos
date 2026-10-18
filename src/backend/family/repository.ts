@@ -5,7 +5,7 @@ import type {ReferenceChanges,ReferenceKind} from './validation';
 // Columna propia de cada tipo de referencia: teléfono del integrante o tipo de la tarjeta.
 const extra={family_members:['phoneNumber','phone_number'],cards:['cardType','card_type']} as const;
 function columns(kind:ReferenceKind){
- return 'id,family_id AS "familyId",name,active,created_at AS "createdAt",'+extra[kind][1]+' AS "'+extra[kind][0]+'"';
+ return 'id,family_id AS "familyId",name,active,created_at AS "createdAt",'+extra[kind][1]+' AS "'+extra[kind][0]+'"'+(kind==='family_members'?',(auth_user_id IS NOT NULL) AS linked':'');
 }
 function dto(row:any):ApiCard|ApiMember{return {...row,createdAt:row.createdAt.toISOString()};}
 export async function listReferences(pool:Pool,family:string,kind:ReferenceKind){

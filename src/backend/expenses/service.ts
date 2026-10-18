@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { validateExpenseWrite } from './validation';
 import { ApiError } from '../shared/errors';
-import { uuid } from '../shared/validators';
+import { object, uuid } from '../shared/validators';
 import { findExpense, insertExpense, listExpenses, transaction, updateExpense, type Connection } from './repository';
 import type { ApiExpense, ExpenseWrite, ExpenseFilters } from '../../shared/apiTypes';
 
@@ -36,7 +36,15 @@ async function references(db: Connection, familyId: string, input: ExpenseWrite,
     if (type && type !== input.paymentMethod && (previous?.cardId !== id || previous?.paymentMethod !== input.paymentMethod)) throw new ApiError(400,'El medio de pago no coincide con el tipo de la tarjeta.');
   }
 }
-export function expenseService(pool: Pool, familyId: string) {
+// Con sesión individual el autor lo define el servidor: es quien creó el gasto y no cambia al editarlo.
+// El cliente puede omitir el campo o repetir el valor correcto; cualquier otro se rechaza.
+function withAuthor(body: unknown, author: string | undefined, previous?: ApiExpense): unknown {
+  if (!author) return body;
+  const input = object(body), expected = previous ? previous.reportedByMemberId : author, sent = input.reportedByMemberId;
+  if (sent !== undefined && sent !== null && sent !== expected) throw new ApiError(403,'El autor del gasto lo define el servidor y no se puede cambiar.');
+  return { ...input, reportedByMemberId: expected };
+}
+export function expenseService(pool: Pool, familyId: string, author?: string) {
   return {
     list: (filters:ExpenseFilters={}) => listExpenses(pool,familyId,filters),
     async get(id: string) {
@@ -45,7 +53,7 @@ export function expenseService(pool: Pool, familyId: string) {
       return result;
     },
     async createExpense(body: unknown, source: 'manual' | 'whatsapp' = 'manual', connection?: Connection) {
-      const input = validateExpenseWrite(body);
+      const input = validateExpenseWrite(withAuthor(body,author));
       const create = async (db: Connection) => {
         await references(db,familyId,input);
         return insertExpense(db,familyId,input,source);
@@ -60,7 +68,7 @@ export function expenseService(pool: Pool, familyId: string) {
         await db.query('SELECT id FROM appgastos.expenses WHERE family_id=$1 AND id=$2 FOR UPDATE',[familyId,id]);
         const previous = await findExpense(db,familyId,id);
         if (!previous) throw new ApiError(404,'Gasto inexistente.');
-        const input = validateExpenseWrite(body,previous);
+        const input = validateExpenseWrite(withAuthor(body,author,previous),previous);
         await references(db,familyId,input,previous);
         return updateExpense(db,familyId,id,input);
       });

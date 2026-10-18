@@ -8,6 +8,7 @@ import {MAX_UNKNOWN_ANSWERS,conversationTtlMinutes} from './config';
 import {normalizePhone} from './security';
 import type {InboxRow} from './repository';
 import type {Catalog,Decision,Member,Outcome} from './decision';
+import {attemptLink} from '../accounts/linking';
 // La conversación cambió entre la lectura y la transacción: se reprocesa el mensaje.
 export class ConversationChanged extends Error {}
 export async function commit(pool:Pool,db:PoolClient,row:InboxRow,at:Date,decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null){
@@ -39,6 +40,11 @@ export async function commit(pool:Pool,db:PoolClient,row:InboxRow,at:Date,decisi
  };
  switch(decision.kind){
   case 'reply':outcome=decision.outcome;reply=decision.reply;if(outcome==='nothing_to_cancel'||outcome==='unauthorized'||outcome==='unsupported')conversationId=null;break;
+  case 'link':{
+   // Vinculación de un número con una cuenta: sin Gemini ni conversación; se resuelve y completa en esta transacción.
+   const result=await attemptLink(db,row.family_id,row.sender,decision.code);
+   outcome=result.outcome;reply=result.reply;conversationId=null;break;
+  }
   case 'interpretation_error':{
    outcome='interpretation_error';lastError=decision.lastError;
    const lead=decision.transient?REPLIES.unavailable:REPLIES.notInterpreted;

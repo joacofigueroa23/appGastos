@@ -272,9 +272,12 @@ test('WhatsApp real: webhook firmado, PostgreSQL aislado, idempotencia y errores
    await db.pool.query('UPDATE appgastos.family_members SET active=false WHERE id=$1',[m.id]);
    assert.equal((await incoming('inactive-member')).outcome,'unauthorized');
    await db.pool.query('UPDATE appgastos.family_members SET active=true WHERE id=$1',[m.id]);
+   // El índice único de teléfono activo ya impide el duplicado; se quita un instante para seguir probando la defensa del bot.
+   await db.pool.query('DROP INDEX appgastos.family_members_active_phone_uidx');
    const duplicate=(await db.pool.query('INSERT INTO appgastos.family_members(family_id,name,phone_number) VALUES($1,$2,$3) RETURNING id',[INITIAL_FAMILY_ID,'Otro','5491144445555'])).rows[0];
    assert.equal((await incoming('ambiguous-member')).outcome,'unauthorized');
    await db.pool.query('DELETE FROM appgastos.family_members WHERE id=$1',[duplicate.id]);assert.equal(calls,before);
+   await db.pool.query("CREATE UNIQUE INDEX family_members_active_phone_uidx ON appgastos.family_members (family_id, (regexp_replace(phone_number,'[\s()+\-]','','g'))) WHERE active AND phone_number IS NOT NULL");
   });
   await t.test('monto faltante, categoría inválida y medio desconocido no registran: preguntan',async()=>{
    const before=(await db.pool.query('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n;

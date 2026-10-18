@@ -1,9 +1,11 @@
 
 import React,{useState} from 'react';
 import {useFinance} from '../context/FinanceContext';
+import {useAuth} from '../context/AuthContext';
 import {PAYMENT_LABELS,type CardType} from '../shared/apiTypes';
 
 function ReferenceSection({kind}:{kind:'cards'|'members'}) {
+ const {mode}=useAuth(),session=mode==='session';
  const {apiCards=[],apiMembers=[],loading,error,createDatabaseCard,updateDatabaseCard,createDatabaseMember,updateDatabaseMember}=useFinance();
  const items=kind==='cards'?apiCards:apiMembers;
  const [editing,setEditing]=useState<string|null>(null),[name,setName]=useState(''),[phone,setPhone]=useState(''),[cardType,setCardType]=useState<CardType|''>('');
@@ -57,13 +59,13 @@ function ReferenceSection({kind}:{kind:'cards'|'members'}) {
   </form>
   <ul className="divide-y divide-slate-100">
    {items.map(item=><li key={item.id} data-reference-id={item.id} className="py-3 flex flex-wrap justify-between gap-3">
-    <div><strong className="text-sm">{item.name}</strong><span className="text-xs text-slate-500 ml-2">{item.active?'Activo':'Inactivo'}</span>
+    <div><strong className="text-sm">{item.name}</strong><span className="text-xs text-slate-500 ml-2">{item.active?'Activo':'Inactivo'}{kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked?' · Con cuenta':''}</span>
      {kind==='members'&&<p className="text-xs text-slate-500">{apiMembers.find(m=>m.id===item.id)?.phoneNumber||'Sin teléfono'}</p>}
      {kind==='cards'&&<p className="text-xs text-slate-500">{(t=>t?PAYMENT_LABELS[t]:'Tipo sin definir')(apiCards.find(c=>c.id===item.id)?.cardType)}</p>}
     </div>
     <div className="flex gap-3 text-sm">
      <button type="button" disabled={busy||loading||!!error} aria-label={'Editar '+noun+' '+item.name} onClick={()=>{setEditing(item.id);setName(item.name);setPhone(kind==='members'?(apiMembers.find(m=>m.id===item.id)?.phoneNumber||''):'');setCardType(kind==='cards'?(apiCards.find(c=>c.id===item.id)?.cardType||''):'');setMessage(null);setFailure(null);}} className="text-blue-700">Editar</button>
-     <button type="button" disabled={busy||loading||!!error} aria-label={(item.active?'Desactivar ':'Activar ')+noun+' '+item.name} onClick={()=>void toggle(item.id,item.active)} className={item.active?'text-slate-600':'text-green-700'}>{item.active?'Desactivar':'Activar'}</button>
+     {!(session&&kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked)&&<button type="button" disabled={busy||loading||!!error} aria-label={(item.active?'Desactivar ':'Activar ')+noun+' '+item.name} onClick={()=>void toggle(item.id,item.active)} className={item.active?'text-slate-600':'text-green-700'}>{item.active?'Desactivar':'Activar'}</button>}
     </div>
    </li>)}
   </ul>

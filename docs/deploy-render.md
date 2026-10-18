@@ -2,6 +2,8 @@
 
 Nada de esto se aplicó. Cada paso marcado con ⚠ requiere autorización explícita.
 
+> Cuentas individuales (login por integrante, autoría y vinculación de WhatsApp): ver [cuentas-individuales.md](cuentas-individuales.md). Es una fase posterior y no cambia nada de este documento hasta que se definan `SUPABASE_URL` y `SUPABASE_ANON_KEY`.
+
 ## 1. Servicio web
 
 | Campo | Valor | Verificado |

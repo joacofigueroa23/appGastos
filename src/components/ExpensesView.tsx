@@ -304,7 +304,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                       {card && <span>({card.name})</span>}
                       <span>·</span>
                       <span className="font-semibold text-slate-800">
-                        {member?.avatar} {member?.name || (isDemoMode?'Familiar':'Sin integrante especificado')}
+                        {member?.avatar} {member?.name || (isDemoMode?'Familiar':'Sin autor identificado')}
                       </span>
                     </div>
 

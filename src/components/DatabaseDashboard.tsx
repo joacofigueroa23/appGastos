@@ -51,9 +51,10 @@ function Donut({slices,total,count,format}:{slices:(Row&{color:string})[];total:
 }
 
 export function DatabaseDashboard({onOpenAddExpense}:{onOpenAddExpense:()=>void}) {
- const {expenses,apiExpenses=[],apiCards=[],formatCurrency,loading,error,refresh}=useFinance();
- const [month,setMonth]=useState(todayDateOnly().slice(0,7)),[currency,setCurrency]=useState('ARS');
- const selected=apiExpenses.filter(e=>e.date.slice(0,7)===month&&e.currency===currency);
+ const {expenses,apiExpenses=[],apiCards=[],apiMembers=[],formatCurrency,loading,error,refresh}=useFinance();
+ const [month,setMonth]=useState(todayDateOnly().slice(0,7)),[currency,setCurrency]=useState('ARS'),[author,setAuthor]=useState('');
+ // 'none' = gastos históricos sin autor. Los totales de la familia son los de "Todos los integrantes".
+ const selected=apiExpenses.filter(e=>e.date.slice(0,7)===month&&e.currency===currency&&(!author||(author==='none'?!e.reportedByMemberId:e.reportedByMemberId===author)));
  const cardExpenses=selected.filter(e=>e.paymentMethod==='credit_card'||e.paymentMethod==='debit_card');
  const cashExpenses=selected.filter(e=>e.paymentMethod==='cash');
  const aggregate=(key:'categoryName'|'paymentMethod'|'cardId')=>{
@@ -77,6 +78,11 @@ export function DatabaseDashboard({onOpenAddExpense}:{onOpenAddExpense:()=>void}
     <label className="text-xs text-slate-500 flex flex-col gap-1">Mes<input aria-label="Mes del dashboard" type="month" value={month} onChange={e=>setMonth(e.target.value)} className={input}/></label>
     <select aria-label="Moneda del dashboard" value={currency} onChange={e=>setCurrency(e.target.value)} className={input}>
      {[...new Set(['ARS',...expenses.map(e=>e.currency)])].map(c=><option key={c}>{c}</option>)}
+    </select>
+    <select aria-label="Integrante del dashboard" value={author} onChange={e=>setAuthor(e.target.value)} className={input}>
+     <option value="">Todos los integrantes</option>
+     {apiMembers.map(m=><option key={m.id} value={m.id}>{m.name}{m.active?'':' (inactivo)'}</option>)}
+     <option value="none">Sin autor identificado</option>
     </select>
     <button onClick={onOpenAddExpense} disabled={loading||!!error} className="h-10 flex items-center gap-1.5 bg-accent hover:bg-blue-700 text-white text-sm font-semibold px-4 rounded-xl transition-colors disabled:opacity-50"><Plus className="w-4 h-4" aria-hidden="true"/>Cargar Gasto</button>
    </div>

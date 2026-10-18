@@ -66,7 +66,11 @@ export const REPLIES={
  notRegistered:'No se registró ningún gasto; ',
  failed:'No pude procesar tu mensaje. Intenta de nuevo con otro texto o usa la carga manual.',
  unsupported:'Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.',
- unauthorized:'Este número no está autorizado para registrar gastos. Revisa su configuración con la familia.',
+ unauthorized:'Este número no está vinculado a un integrante de la familia. Si ya tenés cuenta, generá un código en Mi perfil y enviá: VINCULAR <código>.',
+ linked:'Listo, vinculé este número con tu cuenta. Desde ahora tus gastos quedan a tu nombre.',
+ linkInvalid:'El código no es válido o venció. Generá uno nuevo en Mi perfil y enviá: VINCULAR <código>.',
+ linkAlready:'Este número ya está vinculado a una cuenta.',
+ linkLocked:'Demasiados intentos fallidos. Esperá una hora y generá un código nuevo en Mi perfil.',
  noLongerAuthorized:'Este número ya no está autorizado. No se registró el gasto.',
  referenceGone:'No registré el gasto: una referencia dejó de estar disponible. ',
 };

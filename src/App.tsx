@@ -12,6 +12,8 @@ import { CalendarView } from './components/CalendarView';
 import { ExpensesView } from './components/ExpensesView';
 import { AnalysisView } from './components/AnalysisView';
 import { AddExpenseModal } from './components/AddExpenseModal';
+import { ProfileView } from './components/ProfileView';
+import { AuthGate } from './context/AuthContext';
 
 export function AppContent() {
   const {isDemoMode}=useFinance();
@@ -40,6 +42,8 @@ export function AppContent() {
 
         {currentTab==='family'&&!isDemoMode&&<FamilyManagementView/>}
 
+        {currentTab==='profile'&&<ProfileView/>}
+
         {currentTab === 'expenses' && (
           <ExpensesView onOpenAddExpense={() => setIsAddExpenseOpen(true)} />
         )}
@@ -60,8 +64,10 @@ export function AppContent() {
 
 export default function App() {
   return (
-    <FinanceProvider>
-      <AppContent />
-    </FinanceProvider>
+    <AuthGate>
+      <FinanceProvider>
+        <AppContent />
+      </FinanceProvider>
+    </AuthGate>
   );
 }

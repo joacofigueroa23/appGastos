@@ -5,6 +5,7 @@ import { validateExpenseFilters } from './validation';
 import { listCategories } from './repository';
 import { ApiError } from '../shared/errors';
 import {referenceService} from '../family/service';
+import {sessionMember} from '../accounts/session';
 
 export function registerDatabaseApi(app: Express, pool: Pool | null, familyOverride?: string): void {
   const route = (handler: (req: Request,res: Response,db: Pool,familyId: string) => Promise<unknown>) =>
@@ -19,13 +20,13 @@ export function registerDatabaseApi(app: Express, pool: Pool | null, familyOverr
     res.json({ expenses: await expenseService(db,family).list(validateExpenseFilters(req.query)) });
   }));
   app.post('/api/expenses',route(async (req,res,db,family) => {
-    res.status(201).json({ expense: await expenseService(db,family).createExpense(req.body) });
+    res.status(201).json({ expense: await expenseService(db,family,sessionMember(res)?.id).createExpense(req.body) });
   }));
   app.get('/api/expenses/:id',route(async (req,res,db,family) => {
     res.json({ expense: await expenseService(db,family).get(req.params.id) });
   }));
   app.patch('/api/expenses/:id',route(async (req,res,db,family) => {
-    res.json({ expense: await expenseService(db,family).update(req.params.id,req.body) });
+    res.json({ expense: await expenseService(db,family,sessionMember(res)?.id).update(req.params.id,req.body) });
   }));
   app.delete('/api/expenses/:id',route(async (req,res,db,family) => {
     await expenseService(db,family).delete(req.params.id); res.sendStatus(204);
@@ -39,11 +40,12 @@ export function registerDatabaseApi(app: Express, pool: Pool | null, familyOverr
   ] as const){
     app.get(path,route(async(_req,res,db,family)=>{res.json({[listKey]:await referenceService(db,family,kind).list()});}));
     app.post(path,route(async(req,res,db,family)=>{res.status(201).json({[itemKey]:await referenceService(db,family,kind).create(req.body)});}));
-    app.patch(path+'/:id',route(async(req,res,db,family)=>{res.json({[itemKey]:await referenceService(db,family,kind).update(req.params.id,req.body)});}));
+    app.patch(path+'/:id',route(async(req,res,db,family)=>{res.json({[itemKey]:await referenceService(db,family,kind,!!sessionMember(res)).update(req.params.id,req.body)});}));
   }
   app.use('/api', (error: any,_req: Request,res: Response,_next: NextFunction) => {
     if (error instanceof ApiError) { res.status(error.status).json({ error: error.message }); return; }
     if (['23503','23514','22P02','22003','22007','22008'].includes(error?.code)) { res.status(400).json({ error: 'Datos inválidos para PostgreSQL.' }); return; }
+    if (error?.constraint === 'family_members_active_phone_uidx') { res.status(409).json({ error: 'Ese número ya está asignado a otro integrante activo.' }); return; }
     if (error?.code === '23505') { res.status(409).json({ error: 'Ya existe un registro con ese nombre.' }); return; }
     if (error?.status === 400) { res.status(400).json({error:'JSON inválido.'}); return; }
     console.error('API PostgreSQL: fallo de conexion.', typeof error?.code === 'string' ? error.code : /timeout|timed out/i.test(error?.message || '') ? 'CONNECTION_TIMEOUT' : 'DATABASE_ERROR');

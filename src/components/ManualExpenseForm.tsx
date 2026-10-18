@@ -1,14 +1,17 @@
 import React,{useState} from 'react';
 import {useFinance} from '../context/FinanceContext';
+import {useAuth} from '../context/AuthContext';
 import {PAYMENT_CODES,PAYMENT_LABELS,type ApiExpense,type ExpenseWrite} from '../shared/apiTypes';
 import {todayDateOnly} from '../utils/finance';
 export function ManualExpenseForm({onClose,expense}:{onClose:()=>void;expense?:ApiExpense}) {
  const {categories=[],apiCards=[],apiMembers=[],activeMemberId,loading,error,createDatabaseExpense,updateDatabaseExpense,createDatabaseCard}=useFinance();
+ const {mode,member}=useAuth(),session=mode==='session';
+ const author=session?(expense?apiMembers.find(m=>m.id===expense.reportedByMemberId)?.name:member?.name)||'Sin autor identificado':null;
  const [form,setForm]=useState<ExpenseWrite>({
   date:expense?.date||todayDateOnly(),amount:expense?.amount||'',currency:expense?.currency||'ARS',
   merchant:expense?.merchant||null,description:expense?.description||'',categoryId:expense?.categoryId||'',
   paymentMethod:expense?.paymentMethod||'' as ExpenseWrite['paymentMethod'],cardId:expense?.cardId||null,
-  reportedByMemberId:expense?expense.reportedByMemberId:activeMemberId||null,
+  reportedByMemberId:expense?expense.reportedByMemberId:session?null:activeMemberId||null,
  });
  const [saving,setSaving]=useState(false),[addingCard,setAddingCard]=useState(false);
  const [formError,setFormError]=useState<string|null>(null),[cardName,setCardName]=useState('');
@@ -58,9 +61,9 @@ export function ManualExpenseForm({onClose,expense}:{onClose:()=>void;expense?:A
      <div className="flex gap-2"><input aria-label="Nombre de nueva tarjeta" placeholder="Nombre de nueva tarjeta" className={cls} maxLength={120} value={cardName} onChange={e=>setCardName(e.target.value)}/>
       <button type="button" disabled={!cardName.trim()} onClick={addCard} className="text-sm text-blue-700">Agregar tarjeta</button></div>
     </div>}
-    <label className="block">Informado por<select aria-label="Informado por" className={cls} value={form.reportedByMemberId||''} onChange={e=>patch('reportedByMemberId',e.target.value||null)}>
+    {session?<p className="text-sm">Registrado por: <strong>{author}</strong></p>:<label className="block">Informado por<select aria-label="Informado por" className={cls} value={form.reportedByMemberId||''} onChange={e=>patch('reportedByMemberId',e.target.value||null)}>
      <option value="">Sin integrante especificado</option>{apiMembers.filter(m=>m.active||m.id===expense?.reportedByMemberId).map(m=><option key={m.id} value={m.id}>{m.name}{m.active?'':' (inactivo)'}</option>)}
-    </select></label>
+    </select></label>}
    </fieldset>
    <div className="flex justify-end gap-3"><button type="button" disabled={saving||addingCard} onClick={onClose}>Cancelar</button>
     <button type="submit" disabled={saving||addingCard||loading||!!error} className="bg-blue-600 text-white px-4 py-2 rounded-xl">{saving?'Guardando…':'Guardar Gasto'}</button></div>

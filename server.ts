@@ -8,6 +8,8 @@ import { createDatabasePool } from './src/backend/db/pool';
 import { registerDatabaseApi } from './src/backend/expenses/routes';
 import { registerWhatsApp } from './src/backend/whatsapp/routes';
 import { authFromEnv } from './src/backend/auth';
+import { sessionAuth, supabaseFromEnv } from './src/backend/accounts/session';
+import { registerAccounts } from './src/backend/accounts/routes';
 
 dotenv.config();
 // `npm start` pasa --production: evita servir Vite (código fuente) sin NODE_ENV, sin depender de cross-env en Windows.
@@ -19,10 +21,12 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const databasePool = process.env.DATABASE_URL ? createDatabasePool(process.env.DATABASE_URL) : null;
+// Con SUPABASE_URL y SUPABASE_ANON_KEY: sesión individual en /api (la web se sirve sin clave). Sin ellas: Basic Auth como antes.
+const supabase = supabaseFromEnv();
 const auth = authFromEnv();
 if (auth) app.use(auth);
-
-const databasePool = process.env.DATABASE_URL ? createDatabasePool(process.env.DATABASE_URL) : null;
+if (supabase) app.use(sessionAuth(databasePool, supabase));
 // El demo (sin login, con rutas que gastan Gemini) nunca corre en producción.
 const demo = process.env.VITE_ENABLE_DEMO === 'true';
 if (demo && process.env.NODE_ENV === 'production') console.warn('VITE_ENABLE_DEMO=true ignorado en producción: se usa el modo real.');
@@ -37,6 +41,7 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 if (demoEnabled) (await import('./src/backend/demoRoutes')).registerDemoRoutes(app);
 
+registerAccounts(app, databasePool, supabase);
 registerDatabaseApi(app, databasePool);
 
 // ================= VITE DEV MIDDLEWARE & SERVIDO ESTÁTICO =================

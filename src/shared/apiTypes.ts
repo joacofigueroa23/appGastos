@@ -8,7 +8,8 @@ export interface ApiCategory { id: string; familyId: string; name: string; activ
 export const CARD_TYPES = ['credit_card','debit_card'] as const;
 export type CardType = (typeof CARD_TYPES)[number];
 export interface ApiCard extends ApiCategory { cardType: CardType | null }
-export interface ApiMember extends ApiCategory { phoneNumber: string | null }
+// linked: el integrante tiene cuenta propia (acceso web). No expone el identificador de la cuenta.
+export interface ApiMember extends ApiCategory { phoneNumber: string | null; linked: boolean }
 export interface ExpenseWrite {
   date: string; amount: string; currency: string; merchant: string | null;
   description: string; categoryId: string; paymentMethod: PaymentCode;
@@ -19,6 +20,8 @@ export interface ApiExpense extends ExpenseWrite {
   createdAt: string; updatedAt: string;
 }
 
+// Integrante con sesión: su cuenta, su WhatsApp vinculado y un código de vinculación vigente, si lo hay.
+export interface AuthMember { id: string; name: string; email: string | null; phoneNumber: string | null; pendingLink: { expiresAt: string } | null }
 export interface CardWrite {name:string;active?:boolean;cardType?:CardType|null}
 export interface MemberWrite {name:string;active?:boolean;phoneNumber:string|null}
 export interface ExpenseFilters {

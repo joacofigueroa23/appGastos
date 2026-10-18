@@ -10,6 +10,7 @@ import type {Interpreter} from './interpretation';
 import type {ReplySender} from './transport';
 import {MAX_INTERPRETATION_ATTEMPTS,decide,loadCatalog,type Catalog,type Decision,type Member} from './decision';
 import {ConversationChanged,commit} from './commit';
+import {parseLinkCommand} from '../accounts/linking';
 export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender){
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
@@ -18,6 +19,7 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
    const at=row.meta_timestamp??row.received_at;
    let decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
    if(row.message_type!=='text')decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
+   else if(parseLinkCommand(row.text_body)!==null)decision={kind:'link',code:parseLinkCommand(row.text_body)!};
    else{
     const members=(await memberPhones(pool,row.family_id)) as Member[];
     const matches=members.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender);

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useFinance } from '../context/FinanceContext';
-import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users, UserRound, LogOut } from 'lucide-react';
 
 interface SidebarProps {
   currentTab: string;
@@ -12,6 +13,8 @@ const reveal = 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:op
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => {
   const { members, activeMemberId, setActiveMemberId, isDemoMode, apiMembers = [] } = useFinance();
+  const { mode, member: me, signOut } = useAuth();
+  const session = mode === 'session';
   const currentMember = members.find((m) => m.id === activeMemberId) || members[0];
   const selectableMembers = isDemoMode ? members : members.filter((m) => apiMembers.some((api) => api.id === m.id && api.active));
   const navItems = [
@@ -20,6 +23,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
     { id: 'expenses', label: 'Historial de Gastos', icon: Receipt },
     { id: 'analysis', label: 'Patrones & Balances', icon: BarChart3 },
     ...(!isDemoMode ? [{ id: 'family', label: 'Tarjetas e integrantes', icon: Users }] : []),
+    ...(session ? [{ id: 'profile', label: 'Mi perfil', icon: UserRound }] : []),
   ];
 
   return (
@@ -59,6 +63,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
         })}
       </nav>
 
+      {session ? (
+        <button
+          onClick={() => void signOut()}
+          title={me?.name}
+          className="md:mt-auto flex items-center gap-3 h-11 rounded-xl px-3 whitespace-nowrap text-slate-400 hover:text-white hover:bg-white/5 max-md:justify-center"
+        >
+          <LogOut className="w-5 h-5 shrink-0" aria-hidden="true" />
+          <span className={`text-sm font-medium max-md:sr-only ${reveal}`}>Cerrar sesión</span>
+        </button>
+      ) : (
       <label className="md:mt-auto flex items-center gap-3 h-11 px-3 rounded-xl text-slate-300 hover:bg-white/5">
         <span className="w-5 shrink-0 text-center text-base max-md:hidden" aria-hidden="true">
           {currentMember?.avatar || '●'}
@@ -77,6 +91,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
           ))}
         </select>
       </label>
+      )}
     </aside>
   );
 };

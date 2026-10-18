@@ -11,13 +11,14 @@ import {conversationTtlMinutes} from './config';
 import type {InboxRow} from './repository';
 import type {Interpreter} from './interpretation';
 export type Member=CatalogEntry&{phone_number:string|null};
-export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized';
+export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized'|'linked'|'link_failed';
 export interface Catalog {familyCurrency:string;categories:CatalogEntry[];cards:CardEntry[];member:Member}
 // Lo que decide un mensaje (fuera de la transacción); se aplica dentro de ella.
 export type Decision=
  |{kind:'reply';outcome:Outcome;reply:string;failMembers?:string[]}
  |{kind:'interpretation_error';transient:boolean;lastError:string}
  |{kind:'rejected';errors:string[];editing:boolean}
+ |{kind:'link';code:string}
  |{kind:'cancel'}|{kind:'conflict'}|{kind:'unknown'}
  |{kind:'update';draft:ExpenseDraft;result:DraftValidation;corrected:boolean;notice:string};
 export const MAX_INTERPRETATION_ATTEMPTS=5;
