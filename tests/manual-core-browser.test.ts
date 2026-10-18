@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {isolatedDatabase,freePort} from './helpers/postgres';
+import {TEST_AUTH_ENV,TEST_AUTH_HEADER,apiFetch} from './helpers/auth';
 import {migrate} from '../scripts/migrate';
 import {seed} from '../scripts/seed';
 import {enqueue} from '../src/backend/whatsapp/repository';
@@ -34,14 +35,14 @@ test('Núcleo manual en navegador: gestión, filtros, CRUD y dashboard', { timeo
   const debugPort = await freePort();
   const startServer=()=>spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     windowsHide: true, stdio: 'ignore',
-    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'production', GEMINI_API_KEY: '', DATABASE_URL: db.url, APP_FAMILY_ID:'00000000-0000-4000-8000-000000000001', FRONTEND_DIST_DIR:'dist', TZ:'UTC' },
+    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'production', ...TEST_AUTH_ENV, GEMINI_API_KEY: '', DATABASE_URL: db.url, APP_FAMILY_ID:'00000000-0000-4000-8000-000000000001', FRONTEND_DIST_DIR:'dist', TZ:'UTC' },
   });
   let server=startServer();
   let browser:ReturnType<typeof spawn>|undefined, ws!:WebSocket;
   const pending = new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timeout:ReturnType<typeof setTimeout>}>();
   let sequence = 0;
   try {
-    await waitFor(async () => (await fetch('http://127.0.0.1:' + appPort)).ok, 'El servidor no inició.');
+    await waitFor(async () => (await apiFetch('http://127.0.0.1:' + appPort)).ok, 'El servidor no inició.');
     browser = spawn(browserPath, [
       '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
       '--remote-debugging-port=' + debugPort, '--user-data-dir=' + profile, 'about:blank',
@@ -85,13 +86,14 @@ test('Núcleo manual en navegador: gestión, filtros, CRUD y dashboard', { timeo
 
 
     await command('Page.enable');
+    await command('Network.enable');await command('Network.setExtraHTTPHeaders',{headers:{Authorization:TEST_AUTH_HEADER}});
     const origin='http://127.0.0.1:'+appPort;
     await command('Page.navigate',{url:origin});
     await waitFor(()=>evaluate('document.body.textContent.includes("Sin gastos para este")'),'No cargó el inicio.');
     const button=async(selector:string)=>{
       await evaluate('document.querySelector('+JSON.stringify(selector)+').click()');await delay(80);
     };
-    const api=async(path:string)=>(await (await fetch(origin+'/api/'+path)).json());
+    const api=async(path:string)=>(await (await apiFetch(origin+'/api/'+path)).json());
     await click('Tarjetas e integrantes');
     await field('[aria-label="Nombre de tarjeta"]','Visa');
     await click('Crear tarjeta');
@@ -215,7 +217,7 @@ test('Núcleo manual en navegador: gestión, filtros, CRUD y dashboard', { timeo
     assert.ok((await evaluate('document.body.innerText')).includes('Historia conservada'));
     // Persistencia al reiniciar Express con la misma base temporal.
     const exited=new Promise<void>(r=>server.once('exit',()=>r()));server.kill();await exited;server=startServer();
-    await waitFor(async()=> (await fetch(origin+'/api/expenses/'+expense.id)).ok,'No reinició.');
+    await waitFor(async()=> (await apiFetch(origin+'/api/expenses/'+expense.id)).ok,'No reinició.');
     assert.equal((await api('expenses/'+expense.id)).expense.reportedByMemberId,alternateMember.id);
     await command('Page.reload');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Mes del dashboard"]\')&&!document.querySelector("[role=alert]")'),'No cargó después del reinicio.');

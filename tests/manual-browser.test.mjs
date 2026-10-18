@@ -24,9 +24,10 @@ test('carga manual en navegador: persistencia, selección, errores y métricas',
   const profile = mkdtempSync(join(tmpdir(), 'appgastos-manual-test-'));
   const appPort = 3187;
   const debugPort = 9287;
+  // Demo: solo existe fuera de producción (el servidor lo ignora con NODE_ENV=production), por eso corre con Vite en desarrollo.
   const server = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     windowsHide: true, stdio: 'ignore',
-    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'production', GEMINI_API_KEY: '', DATABASE_URL: '', FRONTEND_DIST_DIR: 'dist-demo', VITE_ENABLE_DEMO: 'true' },
+    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'development', GEMINI_API_KEY: '', DATABASE_URL: '', VITE_ENABLE_DEMO: 'true' },
   });
   let browser, ws;
   const pending = new Map();
@@ -73,13 +74,18 @@ test('carga manual en navegador: persistencia, selección, errores y métricas',
         JSON.stringify(value) + ');el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}))})()');
       await delay(60);
     };
+    // Con Vite en desarrollo la recarga es lenta: se espera al documento nuevo, no al viejo que todavía muestra el texto.
+    const reload = async (message) => {
+      await evaluate('window.__stale=true');
+      await command('Page.reload');
+      await waitFor(() => evaluate('!window.__stale&&document.body.textContent.includes("Control de Gastos")'), message);
+    };
     await command('Page.enable');
     await command('Emulation.setTimezoneOverride', { timezoneId: 'America/Argentina/Buenos_Aires' });
     await command('Page.navigate', { url: 'http://127.0.0.1:' + appPort });
     await waitFor(() => evaluate('document.body.textContent.includes("Control de Gastos")'), 'No cargó React.');
     await evaluate('localStorage.setItem("gf_expenses","[]")');
-    await command('Page.reload');
-    await waitFor(() => evaluate('document.body.textContent.includes("Control de Gastos")'), 'No recargó React.');
+    await reload('No recargó React.');
 
     const fillManual = async (description, amount = '1234.56', date = '2026-10-08') => {
       await click('Cargar Gasto');
@@ -108,8 +114,7 @@ test('carga manual en navegador: persistencia, selección, errores y métricas',
     stored = await evaluate('JSON.parse(localStorage.getItem("gf_expenses"))');
     assert.equal(stored[0].cardId, selected);
     assert.equal(stored[0].amount, 99.99);
-    await command('Page.reload');
-    await waitFor(() => evaluate('document.body.textContent.includes("Control de Gastos")'), 'No recargó.');
+    await reload('No recargó.');
     assert.equal((await evaluate('JSON.parse(localStorage.getItem("gf_expenses"))')).length, 2);
     await fillManual('Después de recargar');
     assert.equal(await evaluate('document.querySelector("select[aria-label=\\"Tarjeta opcional\\"]").value'), '');
@@ -124,8 +129,7 @@ test('carga manual en navegador: persistencia, selección, errores y métricas',
 
     // Datos mixtos deliberados en perfil aislado para verificar el dashboard real.
     await evaluate('(()=>{const now=new Date();const month=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");const base=JSON.parse(localStorage.getItem("gf_expenses"))[0];localStorage.setItem("gf_expenses",JSON.stringify([{...base,id:"ars",date:month+"-08",amount:1234.56,currency:"ARS",category:"Mascotas"},{...base,id:"old",date:"2000-01-01",amount:900000,currency:"ARS"},{...base,id:"usd",date:month+"-08",amount:100,currency:"USD"}]))})()');
-    await command('Page.reload');
-    await waitFor(() => evaluate('document.body.textContent.includes("Control de Gastos")'), 'No cargó dashboard.');
+    await reload('No cargó dashboard.');
     const panel = await evaluate('document.body.textContent');
     assert.ok(panel.includes('1.234,56'));
     assert.ok(panel.includes('(100%)'));

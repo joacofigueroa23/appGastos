@@ -9,6 +9,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Los tests levantan PostgreSQL temporal con initdb.exe; sin esto fallarían con un error poco claro.
+      - name: Localizar PostgreSQL del runner
+        shell: pwsh
+        run: |
+          $bin = $env:PGBIN
+          if (-not $bin) { $f = Get-ChildItem 'C:\Program Files\PostgreSQL' -Recurse -Filter initdb.exe -ErrorAction SilentlyContinue | Select-Object -First 1; if ($f) { $bin = $f.DirectoryName } }
+          if (-not $bin -or -not (Test-Path (Join-Path $bin 'initdb.exe'))) { throw 'initdb.exe no encontrado en el runner' }
+          "TEST_PG_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          & (Join-Path $bin 'postgres.exe') --version
       - run: npm ci
       - run: npm run lint
       - run: npm test

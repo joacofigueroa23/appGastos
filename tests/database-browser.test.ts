@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {isolatedDatabase,freePort} from './helpers/postgres';
+import {TEST_AUTH_ENV,TEST_AUTH_HEADER,apiFetch} from './helpers/auth';
 import {migrate} from '../scripts/migrate';
 import {seed} from '../scripts/seed';
 
@@ -31,14 +32,14 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
   const debugPort = await freePort();
   const startServer=()=>spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     windowsHide: true, stdio: 'ignore',
-    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'production', GEMINI_API_KEY: '', DATABASE_URL: db.url, APP_FAMILY_ID:'00000000-0000-4000-8000-000000000001', FRONTEND_DIST_DIR:'dist', TZ:'UTC' },
+    env: { ...process.env, PORT: String(appPort), NODE_ENV: 'production', ...TEST_AUTH_ENV, GEMINI_API_KEY: '', DATABASE_URL: db.url, APP_FAMILY_ID:'00000000-0000-4000-8000-000000000001', FRONTEND_DIST_DIR:'dist', TZ:'UTC' },
   });
   let server=startServer();
   let browser:ReturnType<typeof spawn>|undefined, ws!:WebSocket;
   const pending = new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timeout:ReturnType<typeof setTimeout>}>();
   let sequence = 0;
   try {
-    await waitFor(async () => (await fetch('http://127.0.0.1:' + appPort)).ok, 'El servidor no inició.');
+    await waitFor(async () => (await apiFetch('http://127.0.0.1:' + appPort)).ok, 'El servidor no inició.');
     browser = spawn(browserPath, [
       '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
       '--remote-debugging-port=' + debugPort, '--user-data-dir=' + profile, 'about:blank',
@@ -81,6 +82,7 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     };
 
     await command('Page.enable');
+    await command('Network.enable');await command('Network.setExtraHTTPHeaders',{headers:{Authorization:TEST_AUTH_HEADER}});
     await command('Emulation.setTimezoneOverride',{timezoneId:'America/Argentina/Buenos_Aires'});
     const origin='http://127.0.0.1:'+appPort;
     await command('Page.navigate',{url:origin});
@@ -90,8 +92,8 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     await evaluate('localStorage.setItem("gf_expenses",'+JSON.stringify(marker)+')');
     await command('Page.reload');
     await waitFor(()=>evaluate('document.body.textContent.includes("Sin gastos para este")'),'LocalStorage no debe poblar PostgreSQL.');
-    assert.equal((await (await fetch(origin+'/api/expenses')).json()).expenses.length,0);
-    const categories=(await (await fetch(origin+'/api/categories')).json()).categories;
+    assert.equal((await (await apiFetch(origin+'/api/expenses')).json()).expenses.length,0);
+    const categories=(await (await apiFetch(origin+'/api/categories')).json()).categories;
     const supermarket=categories.find((c:{id:string;name:string})=>c.name==='Supermercado');
     assert.ok(supermarket);
     await click('Cargar Gasto');
@@ -113,7 +115,7 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     await field('[aria-label="Mes del dashboard"]','2026-10');
     assert.ok((await evaluate('document.body.textContent')).includes('40.000,00'));
     assert.ok((await evaluate('document.body.textContent')).includes('Visa'));
-    let records=(await (await fetch(origin+'/api/expenses')).json()).expenses;
+    let records=(await (await apiFetch(origin+'/api/expenses')).json()).expenses;
     assert.equal(records.length,1);assert.equal(records[0].amount,'40000.00');
     assert.equal(records[0].date,'2026-10-08');assert.equal(records[0].cardId,chosen);
     assert.equal(records[0].merchant,'Carrefour');assert.equal(records[0].source,'manual');
@@ -123,7 +125,7 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     await click('Editar gasto');
     await field('[aria-label="Monto"]','1234.56');
     await click('Guardar Gasto');
-    await waitFor(async()=>((await (await fetch(origin+'/api/expenses/'+id)).json()).expense.amount==='1234.56'),'No se editó.');
+    await waitFor(async()=>((await (await apiFetch(origin+'/api/expenses/'+id)).json()).expense.amount==='1234.56'),'No se editó.');
     await command('Page.reload');
     await waitFor(()=>evaluate('document.body.textContent.includes("1.234,56")'),'No persistió después de recargar.');
     await command('Emulation.setTimezoneOverride',{timezoneId:'Pacific/Honolulu'});
@@ -132,12 +134,12 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     await click('Cancelar');
     // Reiniciar Express conserva el mismo PostgreSQL temporal.
     server.kill();await new Promise(r=>server.once('exit',r));server=startServer();
-    await waitFor(async()=> (await fetch(origin+'/api/expenses/'+id)).ok,'No reinició Express.');
-    assert.equal((await (await fetch(origin+'/api/expenses/'+id)).json()).expense.amount,'1234.56');
+    await waitFor(async()=> (await apiFetch(origin+'/api/expenses/'+id)).ok,'No reinició Express.');
+    assert.equal((await (await apiFetch(origin+'/api/expenses/'+id)).json()).expense.amount,'1234.56');
     // Una moneda y un mes diferentes no alteran las métricas ARS de octubre.
     const input={date:'2026-10-08',amount:'100',currency:'USD',merchant:null,description:'USD separado',categoryId:supermarket.id,paymentMethod:'cash',cardId:null,reportedByMemberId:null};
-    await fetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
-    await fetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...input,currency:'ARS',date:'2000-01-01',amount:'900000'})});
+    await apiFetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+    await apiFetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...input,currency:'ARS',date:'2000-01-01',amount:'900000'})});
     await command('Page.reload');
     await waitFor(()=>evaluate('document.body.textContent.includes("Mes")'),'No cargó dashboard.');
     await field('[aria-label="Mes del dashboard"]','2026-10');
@@ -149,7 +151,7 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
       {...input,currency:'ARS',paymentMethod:'wallet',amount:'70.50',description:'Billetera separada'},
       {...input,currency:'ARS',paymentMethod:'debit_card',amount:'2.25',description:'Tarjeta sin especificar'}
     ]) {
-      const response=await fetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)});
+      const response=await apiFetch(origin+'/api/expenses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)});
       assert.equal(response.status,201);
     }
     await command('Page.reload');
@@ -179,7 +181,7 @@ test('PostgreSQL en navegador: Carrefour, edición, recarga, reinicio y error de
     assert.equal(await evaluate('document.querySelector(\'[aria-label="Monto"]\').value'),'42.42');
     assert.equal(await evaluate('localStorage.getItem("gf_expenses")'),marker);
     await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
-    assert.equal((await (await fetch(origin+'/api/expenses')).json()).expenses.length,6);
+    assert.equal((await (await apiFetch(origin+'/api/expenses')).json()).expenses.length,6);
     await click('Cancelar');
     await command('Browser.close');
   } finally {
