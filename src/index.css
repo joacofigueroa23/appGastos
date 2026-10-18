@@ -1,12 +1,47 @@
 @import "tailwindcss";
 
+/* Paleta: un acento (verde azulado) sobre fondos neutros. Se redefine la escala "blue" para que
+   las vistas sin rediseñar hereden el acento sin tocar sus clases. */
+@theme {
+  --color-blue-50: #f0fdfa;
+  --color-blue-100: #ccfbf1;
+  --color-blue-200: #99f6e4;
+  --color-blue-500: #0d9488;
+  --color-blue-600: #0f766e;
+  --color-blue-700: #115e59;
+  --color-blue-800: #134e4a;
+  --color-ground: #f4f5f7;
+  --color-ink: #0f1419;
+  --color-rail: #10161c;
+  --color-accent: #0f766e;
+  --color-accent-soft: #99f6e4;
+}
+
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-variant-numeric: tabular-nums;
+    background: var(--color-ground);
   }
-  
+
   code, pre, .font-mono {
     font-family: 'JetBrains Mono', monospace;
+  }
+
+  button:not(:disabled), select, [role="button"] {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 
