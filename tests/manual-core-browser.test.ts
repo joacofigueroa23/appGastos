@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import {isolatedDatabase,freePort} from './helpers/postgres';
+import {isolatedDatabase,freePort,removeDirectory} from './helpers/postgres';
 import {TEST_AUTH_ENV,TEST_AUTH_HEADER,apiFetch} from './helpers/auth';
 import {migrate} from '../scripts/migrate';
 import {seed} from '../scripts/seed';
@@ -288,6 +288,6 @@ test('Núcleo manual en navegador: gestión, filtros, CRUD y dashboard', { timeo
   } finally {
     ws?.close();
     for (const entry of pending.values()) {clearTimeout(entry.timeout);entry.reject(new Error('Prueba terminada'));}
-    browser?.kill();server.kill();await db.stop();
+    browser?.kill();server.kill();await db.stop();await delay(300);removeDirectory(profile);
   }
 });

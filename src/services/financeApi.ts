@@ -1,4 +1,4 @@
-import type { ApiCard, ApiCategory, ApiExpense, ApiMember, AuthMember, ExpenseWrite, CardWrite, MemberWrite, ExpenseFilters } from '../shared/apiTypes';
+import type { FixedExpense, FixedOccurrence, UnlinkedPayment, BudgetReport, ApiCard, ApiCategory, ApiExpense, ApiMember, AuthMember, Role, ExpenseWrite, CardWrite, MemberWrite, ExpenseFilters } from '../shared/apiTypes';
 export class ApiRequestError extends Error { constructor(public status: number, message: string) { super(message); } }
 // Con sesión individual (Supabase) cada pedido lleva el token; sin ella el navegador usa Basic Auth por su cuenta.
 let tokenProvider: (() => Promise<string | null>) | null = null, onUnauthorized: (() => void) | null = null;
@@ -16,6 +16,19 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
   return res.json();
 }
 export const financeApi = {
+  budgets: (month:string) => request<BudgetReport>('/api/budgets?month='+month),
+  setBudget: (month:string,categoryId:string,amount:string) => request<void>('/api/budgets/'+month+'/'+categoryId,'PUT',{amount}),
+  removeBudget: (month:string,categoryId:string) => request<void>('/api/budgets/'+month+'/'+categoryId,'DELETE'),
+  copyBudgets: (from:string,to:string) => request<{copied:number}>('/api/budgets/copy','POST',{from,to}),
+  fixedExpenses: () => request<{fixedExpenses:FixedExpense[]}>('/api/fixed-expenses'),
+  createFixedExpense: (input:Record<string,unknown>) => request<{fixedExpense:FixedExpense}>('/api/fixed-expenses','POST',input),
+  updateFixedExpense: (id:string,input:Record<string,unknown>) => request<{fixedExpense:FixedExpense}>('/api/fixed-expenses/'+id,'PATCH',input),
+  overdueOccurrences: () => request<{occurrences:FixedOccurrence[]}>('/api/fixed-expenses/overdue'),
+  payOccurrence: (id:string,input:{paymentMethod:string;amount?:string;date?:string}) => request<{expense:ApiExpense}>('/api/fixed-expenses/occurrences/'+id+'/pay','POST',input),
+  occurrences: (month:string) => request<{occurrences:FixedOccurrence[]}>('/api/fixed-expenses/occurrences?month='+month),
+  unlinkedPayments: (month:string) => request<{expenses:UnlinkedPayment[]}>('/api/fixed-expenses/unlinked?month='+month),
+  linkPayment: (occurrenceId:string,expenseId:string) => request<void>('/api/fixed-expenses/occurrences/'+occurrenceId+'/link','POST',{expenseId}),
+  unlinkPayment: (occurrenceId:string) => request<void>('/api/fixed-expenses/occurrences/'+occurrenceId+'/link','DELETE'),
   me: () => request<{member:AuthMember}>('/api/auth/me'),
   createLinkCode: () => request<{code:string;expiresAt:string}>('/api/auth/whatsapp-link','POST'),
   unlinkWhatsApp: () => request<void>('/api/auth/whatsapp-link','DELETE'),
@@ -29,5 +42,6 @@ export const financeApi = {
   updateCard: (id:string,input:Partial<CardWrite>) => request<{card:ApiCard}>('/api/cards/'+id,'PATCH',input),
   createMember: (input:MemberWrite) => request<{member:ApiMember}>('/api/family-members','POST',input),
   updateMember: (id:string,input:Partial<MemberWrite>) => request<{member:ApiMember}>('/api/family-members/'+id,'PATCH',input),
+  setRole: (id:string,role:Role) => request<{member:{id:string;name:string;role:Role}}>('/api/family-members/'+id+'/role','PATCH',{role}),
   createCard: (input:CardWrite) => request<{card:ApiCard}>('/api/cards','POST',input),
 };

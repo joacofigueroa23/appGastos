@@ -13,10 +13,13 @@ import { ExpensesView } from './components/ExpensesView';
 import { AnalysisView } from './components/AnalysisView';
 import { AddExpenseModal } from './components/AddExpenseModal';
 import { ProfileView } from './components/ProfileView';
-import { AuthGate } from './context/AuthContext';
+import { BudgetsView } from './components/BudgetsView';
+import { FixedExpensesView } from './components/FixedExpensesView';
+import { AuthGate, useRole } from './context/AuthContext';
 
 export function AppContent() {
   const {isDemoMode}=useFinance();
+  const admin=useRole()==='admin';
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isAddExpenseOpen, setIsAddExpenseOpen] = useState<boolean>(false);
 
@@ -40,9 +43,13 @@ export function AppContent() {
 
         {currentTab === 'calendar' && (isDemoMode ? <CalendarView /> : <p>Calendario y vencimientos preservados en modo demo; fuera de prioridad actual.</p>)}
 
-        {currentTab==='family'&&!isDemoMode&&<FamilyManagementView/>}
+        {currentTab==='family'&&!isDemoMode&&admin&&<FamilyManagementView/>}
 
         {currentTab==='profile'&&<ProfileView/>}
+
+        {currentTab==='budgets'&&!isDemoMode&&admin&&<BudgetsView/>}
+
+        {currentTab==='fixed'&&!isDemoMode&&admin&&<FixedExpensesView/>}
 
         {currentTab === 'expenses' && (
           <ExpensesView onOpenAddExpense={() => setIsAddExpenseOpen(true)} />

@@ -11,6 +11,7 @@ import type {ReplySender} from './transport';
 import {MAX_INTERPRETATION_ATTEMPTS,decide,loadCatalog,type Catalog,type Decision,type Member} from './decision';
 import {ConversationChanged,commit} from './commit';
 import {parseLinkCommand} from '../accounts/linking';
+import {answerQuery,parseQuery} from './queries';
 export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender){
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
@@ -32,7 +33,11 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
      conversation=await findActiveConversation(pool,row.family_id,matches[0].id);
      // Vencida: no se completa; se marca expired en la transacción y el mensaje es una interacción nueva.
      if(conversation&&new Date(conversation.expiresAt)<=at)conversation=null;
-     decision=await decide(pool,interpret,row,at,catalog,conversation);
+     // Consulta financiera ("¿cuánto gasté?"): se responde por reglas y SQL con los permisos del rol; no pasa por Gemini y
+     // no toca la conversación pendiente.
+     const query=parseQuery(row.text_body);
+     if(query){const a=await answerQuery(pool,row.family_id,{role:matches[0].role==='admin'?'admin':'member',memberId:matches[0].id},query,at,catalog.familyCurrency);decision={kind:'reply',outcome:a.outcome,reply:a.reply};}
+     else decision=await decide(pool,interpret,row,at,catalog,conversation);
     }
    }
    await transaction(pool,db=>commit(pool,db,row,at,decision,catalog,conversation));

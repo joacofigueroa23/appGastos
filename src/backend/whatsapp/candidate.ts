@@ -255,7 +255,9 @@ export function validateDraft(draft:ExpenseDraft,ctx:Pick<InterpretationContext,
  const missingFields=QUESTION_ORDER.filter(f=>missing.has(f));
  let expense:ExpenseWrite|null=null;
  if(!missingFields.length&&!errors.length){
-  try{expense=validateExpenseWrite({date:draft.date?.value??draft.referenceDate,amount:draft.amount!.value,currency:draft.currency?.value??ctx.defaultCurrency,merchant,description,categoryId,paymentMethod:method,cardId,reportedByMemberId:ctx.member.id});}
+  try{expense=validateExpenseWrite({date:draft.date?.value??draft.referenceDate,amount:draft.amount!.value,currency:draft.currency?.value??ctx.defaultCurrency,merchant,description,categoryId,paymentMethod:method,cardId,reportedByMemberId:ctx.member.id,scope:draft.scope??'personal'});
+   // Corregir un gasto guardado no le asigna ámbito: conserva el que tenía (aunque sea "sin clasificar").
+   if(draft.editingExpenseId&&!draft.scope)delete expense.scope;}
   catch{errors.push('campos incompatibles con el modelo de gastos');}
  }
  return {valid:!!expense,missingFields,validationErrors:errors,expense};

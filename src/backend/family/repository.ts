@@ -5,11 +5,12 @@ import type {ReferenceChanges,ReferenceKind} from './validation';
 // Columna propia de cada tipo de referencia: teléfono del integrante o tipo de la tarjeta.
 const extra={family_members:['phoneNumber','phone_number'],cards:['cardType','card_type']} as const;
 function columns(kind:ReferenceKind){
- return 'id,family_id AS "familyId",name,active,created_at AS "createdAt",'+extra[kind][1]+' AS "'+extra[kind][0]+'"'+(kind==='family_members'?',(auth_user_id IS NOT NULL) AS linked':'');
+ return 'id,family_id AS "familyId",name,active,created_at AS "createdAt",'+extra[kind][1]+' AS "'+extra[kind][0]+'"'+(kind==='family_members'?',(auth_user_id IS NOT NULL) AS linked,role':'');
 }
 function dto(row:any):ApiCard|ApiMember{return {...row,createdAt:row.createdAt.toISOString()};}
-export async function listReferences(pool:Pool,family:string,kind:ReferenceKind){
- const r=await pool.query('SELECT '+columns(kind)+' FROM appgastos.'+kind+' WHERE family_id=$1 ORDER BY name,id',[family]);
+// only: limita a una fila (el integrante que consulta)
+export async function listReferences(pool:Pool,family:string,kind:ReferenceKind,only?:string){
+ const r=await pool.query('SELECT '+columns(kind)+' FROM appgastos.'+kind+' WHERE family_id=$1'+(only?' AND id=$2':'')+' ORDER BY name,id',only?[family,only]:[family]);
  return r.rows.map(dto);
 }
 export async function insertReference(pool:Pool,family:string,kind:ReferenceKind,input:ReferenceChanges){
@@ -34,5 +35,5 @@ export async function catalogRows(pool:Pool,family:string){
  return {defaultCurrency:familyRow.default_currency as string,categories,cards};
 }
 export async function memberPhones(pool:Pool,family:string){
- return (await pool.query('SELECT id,name,active,phone_number FROM appgastos.family_members WHERE family_id=$1',[family])).rows;
+ return (await pool.query('SELECT id,name,active,phone_number,role FROM appgastos.family_members WHERE family_id=$1',[family])).rows;
 }

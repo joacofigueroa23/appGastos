@@ -9,6 +9,10 @@ const clean=(text:string)=>normalizeName(text).replace(/[.,;:!?¡¿"']/g,' ').re
 const CANCEL=/^(cancelar|cancela|cancelalo|cancelo|no lo cargues|no lo registres|olvidalo|olvidate|dejalo)\b/;
 export function isCancel(text:string):boolean{return CANCEL.test(clean(text));}
 
+// Gasto de la casa solo con expresión explícita; nunca por categoría o comercio ("Pagué el colegio de la casa").
+const HOUSEHOLD=/\b(de la casa|del hogar|para la casa|para el hogar)\b/;
+export function householdMarker(text:string):boolean{return HOUSEHOLD.test(clean(text));}
+
 const CORRECTION=/\b(perdon|me equivoque|me confundi|en realidad|corrijo|correccion|no fue|no era)\b/;
 export function hasCorrectionMarker(text:string):boolean{return CORRECTION.test(clean(text));}
 

@@ -10,7 +10,7 @@ export function normalizeAmount(value: unknown): string {
   if (BigInt(whole) * 100n + BigInt(decimals.padEnd(2, '0')) <= 0n) throw new ApiError(400, 'El monto debe ser mayor a cero.');
   return whole + '.' + decimals.padEnd(2, '0');
 }
-const fields = ['date','amount','currency','merchant','description','categoryId','paymentMethod','cardId','reportedByMemberId'];
+const fields = ['date','amount','currency','merchant','description','categoryId','paymentMethod','cardId','reportedByMemberId','scope'];
 export function validateExpenseWrite(value: unknown, previous?: ExpenseWrite): ExpenseWrite {
   const body = object(value);
   if (!Object.keys(body).length) throw new ApiError(400, 'No hay cambios.');
@@ -21,8 +21,11 @@ export function validateExpenseWrite(value: unknown, previous?: ExpenseWrite): E
   if (!(PAYMENT_CODES as readonly unknown[]).includes(input.paymentMethod)) throw new ApiError(400, 'Medio de pago inválido.');
   const cardId = input.cardId == null ? null : uuid(input.cardId, 'cardId');
   if (cardId && !['debit_card','credit_card'].includes(input.paymentMethod as string)) throw new ApiError(400, 'La tarjeta requiere pago con crédito o débito.');
+  // Gasto nuevo: personal salvo que se indique. Un histórico sin clasificar (null) conserva su estado hasta que se clasifique.
+  if (input.scope != null && input.scope !== 'personal' && input.scope !== 'household') throw new ApiError(400, "scope debe ser 'personal' o 'household'.");
+  const scope = input.scope ?? (previous ? null : 'personal');
   return {
-    date: input.date, amount: normalizeAmount(input.amount), currency: input.currency,
+    scope, date: input.date, amount: normalizeAmount(input.amount), currency: input.currency,
     merchant: input.merchant == null ? null : text(input.merchant, 'merchant', 200),
     description: text(input.description, 'description', 1000),
     categoryId: uuid(input.categoryId, 'categoryId'),
@@ -33,7 +36,7 @@ export function validateExpenseWrite(value: unknown, previous?: ExpenseWrite): E
 
 export function validateExpenseFilters(value:unknown):import('../../shared/apiTypes').ExpenseFilters {
  const query=object(value);
- const fields=['month','currency','categoryId','paymentMethod','cardId','reportedByMemberId','merchant'];
+ const fields=['month','currency','categoryId','paymentMethod','cardId','reportedByMemberId','merchant','scope'];
  if(Object.keys(query).some(k=>!fields.includes(k)))throw new ApiError(400,'Filtro no permitido.');
  const out:import('../../shared/apiTypes').ExpenseFilters={};
  if(query.month!==undefined){
@@ -50,5 +53,9 @@ export function validateExpenseFilters(value:unknown):import('../../shared/apiTy
   out.paymentMethod=query.paymentMethod as import('../../shared/apiTypes').PaymentCode;
  }
  if(query.merchant!==undefined)out.merchant=text(query.merchant,'merchant',200);
+ if(query.scope!==undefined){
+  if(query.scope!=='personal'&&query.scope!=='household'&&query.scope!=='none')throw new ApiError(400,'Ámbito inválido.');
+  out.scope=query.scope;
+ }
  return out;
 }

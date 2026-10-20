@@ -7,6 +7,8 @@ import {LoginView} from '../components/LoginView';
 interface AuthState {mode:'basic'|'session';member:AuthMember|null;signOut:()=>Promise<void>;refreshMe:()=>Promise<AuthMember|null>}
 const AuthContext=createContext<AuthState>({mode:'basic',member:null,signOut:async()=>{},refreshMe:async()=>null});
 export const useAuth=()=>useContext(AuthContext);
+// Sin sesión individual (Basic Auth) el acceso es de administrador, igual que en el servidor. La visibilidad real la decide el backend.
+export const useRole=():'admin'|'member'=>useAuth().member?.role??'admin';
 type Phase='loading'|'login'|'denied'|'ready';
 const Screen=({children}:{children:ReactNode})=><div className="min-h-screen bg-ground flex items-center justify-center p-4">{children}</div>;
 export function AuthGate({children}:{children:ReactNode}){

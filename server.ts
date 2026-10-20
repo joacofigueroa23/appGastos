@@ -10,6 +10,8 @@ import { registerWhatsApp } from './src/backend/whatsapp/routes';
 import { authFromEnv } from './src/backend/auth';
 import { sessionAuth, supabaseFromEnv } from './src/backend/accounts/session';
 import { registerAccounts } from './src/backend/accounts/routes';
+import { registerBudgets } from './src/backend/budgets/routes';
+import { registerFixedExpenses } from './src/backend/fixed/routes';
 
 dotenv.config();
 // `npm start` pasa --production: evita servir Vite (código fuente) sin NODE_ENV, sin depender de cross-env en Windows.
@@ -42,6 +44,8 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 if (demoEnabled) (await import('./src/backend/demoRoutes')).registerDemoRoutes(app);
 
 registerAccounts(app, databasePool, supabase);
+registerBudgets(app, databasePool);
+registerFixedExpenses(app, databasePool);
 registerDatabaseApi(app, databasePool);
 
 // ================= VITE DEV MIDDLEWARE & SERVIDO ESTÁTICO =================

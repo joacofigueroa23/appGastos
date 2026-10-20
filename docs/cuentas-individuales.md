@@ -1,5 +1,7 @@
 # Cuentas individuales y autoría de gastos
 
+> Fase siguiente (roles, privacidad por integrante, presupuestos y gastos fijos): [roles-y-finanzas.md](roles-y-finanzas.md). Cambia lo que ve cada integrante: lo descrito abajo sobre lectura familiar abierta pasa a ser solo del administrador.
+
 Estado: implementado y probado en local. **Nada de esto se aplicó en Supabase ni en Render.**
 
 ## Cómo funciona

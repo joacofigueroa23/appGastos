@@ -12,6 +12,7 @@ export function ManualExpenseForm({onClose,expense}:{onClose:()=>void;expense?:A
   merchant:expense?.merchant||null,description:expense?.description||'',categoryId:expense?.categoryId||'',
   paymentMethod:expense?.paymentMethod||'' as ExpenseWrite['paymentMethod'],cardId:expense?.cardId||null,
   reportedByMemberId:expense?expense.reportedByMemberId:session?null:activeMemberId||null,
+  scope:expense?expense.scope??null:'personal',
  });
  const [saving,setSaving]=useState(false),[addingCard,setAddingCard]=useState(false);
  const [formError,setFormError]=useState<string|null>(null),[cardName,setCardName]=useState('');
@@ -45,6 +46,9 @@ export function ManualExpenseForm({onClose,expense}:{onClose:()=>void;expense?:A
     </div>
     <label className="block">Moneda<select aria-label="Moneda" className={cls} value={form.currency} onChange={e=>patch('currency',e.target.value)}>
      {[...new Set(['ARS','USD','EUR',form.currency])].map(c=><option key={c} value={c}>{c}</option>)}
+    </select></label>
+    <label className="block">Ámbito<select aria-label="Ámbito" className={cls} value={form.scope||''} onChange={e=>setForm(p=>({...p,scope:(e.target.value||null) as ExpenseWrite['scope']}))}>
+     {!form.scope&&<option value="">Sin clasificar</option>}<option value="personal">Personal</option><option value="household">De la casa</option>
     </select></label>
     <label className="block">Comercio<input aria-label="Comercio" className={cls} maxLength={200} value={form.merchant||''} onChange={e=>patch('merchant',e.target.value||null)}/></label>
     <label className="block">Categoría *<select aria-label="Categoría" className={cls} required value={form.categoryId} onChange={e=>patch('categoryId',e.target.value)}>

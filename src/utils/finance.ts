@@ -9,6 +9,11 @@ export function parseAmountInput(value: string): number {
   const amount = Number(input.replace(',', '.'));
   return Number.isFinite(amount) && Number.isSafeInteger(Math.round(amount * 100)) ? amount : NaN;
 }
+// Huella barata de una lista de gastos (cantidad + última modificación). El panel sondea la API cada 10 s y entrega una lista
+// nueva aunque nada cambie: los efectos que dependen de los gastos usan esta huella para no repetir pedidos.
+export function expensesStamp(list: readonly { updatedAt?: string }[] = []): string {
+  return list.length + ':' + list.reduce((latest, e) => (e.updatedAt && e.updatedAt > latest ? e.updatedAt : latest), '');
+}
 export function isDateOnly(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);

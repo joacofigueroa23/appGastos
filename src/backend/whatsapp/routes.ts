@@ -7,6 +7,7 @@ import {enqueue,type IncomingMessage} from './repository';
 import {geminiInterpreter,type Interpreter} from './interpretation';
 import {metaSender,metaTokenStatus,type ReplySender} from './transport';
 import {whatsappProcessor} from './processor';
+import {actorOf} from '../accounts/policy';
 export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean}
 export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOptions={}){
  const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender()):null;
@@ -64,14 +65,16 @@ export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOpti
  app.use('/api/whatsapp/webhook',((error, _req, res, _next)=>{
   res.status(error?.status===413?413:400).json({error:'Cuerpo del webhook inválido o demasiado grande.'});
  }) as express.ErrorRequestHandler);
- app.get('/api/whatsapp/config',(_req,res)=>res.json({
+ // La configuración (aun enmascarada) y los registros son del administrador.
+ const adminOnly:express.RequestHandler=(_req,res,next)=>actorOf(res).role==='admin'?next():void res.status(403).json({error:'Esta operación es solo para administradores.'});
+ app.get('/api/whatsapp/config',adminOnly,(_req,res)=>res.json({
   verifyToken:'',phoneNumberId:process.env.WHATSAPP_PHONE_NUMBER_ID?'••••'+process.env.WHATSAPP_PHONE_NUMBER_ID.slice(-4):'',
   hasAccessToken:!!process.env.WHATSAPP_ACCESS_TOKEN,hasAppSecret:!!process.env.WHATSAPP_APP_SECRET,
   hasVerifyToken:!!process.env.WHATSAPP_VERIFY_TOKEN,
   webhookUrl:(process.env.APP_URL||'')+'/api/whatsapp/webhook',
  }));
  app.post('/api/whatsapp/config',(_req,res)=>res.status(403).json({error:'Configura WhatsApp exclusivamente mediante variables del servidor.'}));
- app.get('/api/whatsapp/logs',(_req,res)=>res.json({logs:[]}));
+ app.get('/api/whatsapp/logs',adminOnly,(_req,res)=>res.json({logs:[]}));
  app.use('/api/whatsapp',(_req,res)=>res.status(410).json({error:'Simulador anterior preservado en modo demo; no registra gastos reales.'}));
  return {processor,stop};
 }

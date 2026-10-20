@@ -39,6 +39,7 @@ test('Cuentas individuales: sesión, autoría, vinculación de WhatsApp y permis
  const q=(sql:string,args:unknown[]=[])=>db.pool.query(sql,args);
  const member=async(name:string,auth:string|null,active=true,phone:string|null=null)=>(await q('INSERT INTO appgastos.family_members(family_id,name,auth_user_id,active,phone_number) VALUES($1,$2,$3,$4,$5) RETURNING id',[INITIAL_FAMILY_ID,name,auth,active,phone])).rows[0].id as string;
  const ana=await member('Ana',users.ana),beto=await member('Beto',users.beto),luis=await member('Luis',users.luis,false),carla=await member('Carla',null,true,'5491100000003');
+ await q("UPDATE appgastos.family_members SET role='admin' WHERE id=$1",[ana]);
  const category=(await q("INSERT INTO appgastos.categories(family_id,name) VALUES($1,'Compras') RETURNING id",[INITIAL_FAMILY_ID])).rows[0].id as string;
  const historic=(await q("INSERT INTO appgastos.expenses(family_id,date,amount,currency,description,category_id,payment_method) VALUES($1,'2026-09-01',500,'ARS','Gasto histórico',$2,'cash') RETURNING id",[INITIAL_FAMILY_ID,category])).rows[0].id as string;
  const replies:{to:string;text:string}[]=[];
@@ -82,44 +83,65 @@ test('Cuentas individuales: sesión, autoría, vinculación de WhatsApp y permis
   try{assert.equal((await fetch(url+'/api/expenses',{headers:{Authorization:'Bearer tok-ana'}})).status,503);}finally{s.close();}
   assert.ok(saved);
  });
- await t.test('integrante activo lee los movimientos de toda la familia',async()=>{
-  const a=await json(await call('/api/expenses','tok-ana'));assert.equal(a.expenses.length,1);
-  const b=await json(await call('/api/expenses','tok-beto'));assert.deepEqual(b.expenses.map((e:any)=>e.id),[historic]);
-  assert.equal(b.expenses[0].reportedByMemberId,null);
+ await t.test('privacidad: el administrador ve todo y el integrante solo lo que registró',async()=>{
+  const a=await json(await call('/api/expenses','tok-ana'));assert.deepEqual(a.expenses.map((e:any)=>e.id),[historic]);
+  assert.equal(a.expenses[0].reportedByMemberId,null);
+  // El histórico sin autor solo lo ve un administrador.
+  assert.deepEqual((await json(await call('/api/expenses','tok-beto'))).expenses,[]);
+  assert.equal((await call('/api/expenses/'+historic,'tok-beto')).status,404);
+  assert.equal((await call('/api/expenses/'+historic,'tok-ana')).status,200);
  });
  await t.test('autoría: la define el servidor y no se puede falsificar ni reasignar',async()=>{
   const body={date:'2026-10-10',amount:'35000',currency:'ARS',description:'Súper',categoryId:category,paymentMethod:'cash'};
   const created=await json(await call('/api/expenses','tok-ana','POST',body));
-  assert.equal(created.expense.reportedByMemberId,ana);
+  assert.equal(created.expense.reportedByMemberId,ana);assert.equal(created.expense.scope,'personal');
   // Falsificar: indicar a otro integrante, o intentar elegir la familia.
   assert.equal((await call('/api/expenses','tok-ana','POST',{...body,reportedByMemberId:beto})).status,403);
   assert.equal((await call('/api/expenses','tok-ana','POST',{...body,familyId:randomUUID()})).status,400);
-  // Otro integrante puede editar el monto (gasto compartido) pero el autor original se conserva.
-  const edited=await json(await call('/api/expenses/'+created.expense.id,'tok-beto','PATCH',{amount:'36000'}));
-  assert.equal(edited.expense.amount,'36000.00');assert.equal(edited.expense.reportedByMemberId,ana);
-  assert.equal((await call('/api/expenses/'+created.expense.id,'tok-beto','PATCH',{reportedByMemberId:beto})).status,403);
-  assert.equal((await call('/api/expenses/'+created.expense.id,'tok-ana','PATCH',{reportedByMemberId:null,amount:'1'})).status,200);
-  assert.equal((await json(await call('/api/expenses/'+created.expense.id,'tok-ana'))).expense.reportedByMemberId,ana);
+  const mine=await json(await call('/api/expenses','tok-beto','POST',{...body,description:'De Beto'}));
+  assert.equal(mine.expense.reportedByMemberId,beto);
+  // Un integrante no ve, edita ni borra lo ajeno: responde como si no existiera.
+  for(const [method,payload] of [['GET',undefined],['PATCH',{amount:'1'}],['DELETE',undefined]] as const)
+   assert.equal((await call('/api/expenses/'+created.expense.id,'tok-beto',method,payload)).status,404,method);
+  assert.equal((await json(await call('/api/expenses/'+created.expense.id,'tok-ana'))).expense.amount,'35000.00');
+  // Lo propio sí; el administrador edita gastos de otros sin cambiar su autor.
+  assert.equal((await call('/api/expenses/'+mine.expense.id,'tok-beto','PATCH',{amount:'36000'})).status,200);
+  const edited=await json(await call('/api/expenses/'+mine.expense.id,'tok-ana','PATCH',{amount:'37000'}));
+  assert.equal(edited.expense.reportedByMemberId,beto);assert.equal(edited.expense.amount,'37000.00');
+  assert.equal((await call('/api/expenses/'+mine.expense.id,'tok-ana','PATCH',{reportedByMemberId:ana})).status,403);
+  assert.equal((await call('/api/expenses/'+mine.expense.id,'tok-beto','PATCH',{reportedByMemberId:beto,amount:'38000'})).status,200);
   // Histórico: sigue sin autor, no se asigna uno inventado.
   assert.equal((await call('/api/expenses/'+historic,'tok-ana','PATCH',{reportedByMemberId:ana})).status,403);
   assert.equal((await json(await call('/api/expenses/'+historic,'tok-ana','PATCH',{amount:'600'}))).expense.reportedByMemberId,null);
+  assert.equal((await call('/api/expenses/'+mine.expense.id,'tok-beto','DELETE')).status,204);
  });
- await t.test('filtro por integrante y totales familiares',async()=>{
-  const mine=await json(await call('/api/expenses?reportedByMemberId='+ana,'tok-beto'));
-  assert.ok(mine.expenses.length>=1&&mine.expenses.every((e:any)=>e.reportedByMemberId===ana));
-  assert.equal((await json(await call('/api/expenses','tok-beto'))).expenses.length,2);
+ await t.test('filtro por integrante: el administrador filtra; el integrante no puede ampliar su alcance',async()=>{
+  const byAna=await json(await call('/api/expenses?reportedByMemberId='+ana,'tok-ana'));
+  assert.ok(byAna.expenses.length>=1&&byAna.expenses.every((e:any)=>e.reportedByMemberId===ana));
+  assert.deepEqual((await json(await call('/api/expenses?reportedByMemberId='+ana,'tok-beto'))).expenses,[]);
+  assert.equal((await json(await call('/api/expenses','tok-ana'))).expenses.length,2);
  });
- await t.test('una cuenta con acceso no se administra desde la API de otro integrante',async()=>{
+ await t.test('integrantes, tarjetas y configuración: el integrante no administra ni ve datos ajenos',async()=>{
+  const own=await json(await call('/api/family-members','tok-beto'));
+  assert.deepEqual(own.members.map((m:any)=>m.id),[beto]);
+  assert.ok((await json(await call('/api/family-members','tok-ana'))).members.length>=4);
+  assert.equal((await call('/api/family-members','tok-beto','POST',{name:'Intruso'})).status,403);
+  assert.equal((await call('/api/family-members/'+carla,'tok-beto','PATCH',{phoneNumber:'5491100009999'})).status,403);
+  assert.equal((await call('/api/family-members/'+beto+'/role','tok-beto','PATCH',{role:'admin'})).status,403);
+  assert.equal((await call('/api/cards','tok-beto','POST',{name:'Visa'})).status,201);
+  const card=(await json(await call('/api/cards','tok-beto'))).cards[0].id;
+  assert.equal((await call('/api/cards/'+card,'tok-beto','PATCH',{active:false})).status,403);
+  assert.equal((await call('/api/whatsapp/config','tok-beto')).status,403);
+  assert.equal((await call('/api/whatsapp/config','tok-ana')).status,200);
+  // Administrador: una cuenta con acceso no cambia su WhatsApp por la API, pero un valor sin cambios no se rechaza.
   assert.equal((await call('/api/family-members/'+beto,'tok-ana','PATCH',{phoneNumber:'5491100009999'})).status,403);
-  assert.equal((await call('/api/family-members/'+beto,'tok-ana','PATCH',{active:false})).status,403);
-  assert.equal((await call('/api/family-members/'+ana,'tok-ana','PATCH',{phoneNumber:'5491100009999'})).status,403);
-  assert.equal((await call('/api/family-members/'+beto,'tok-ana','PATCH',{name:'Beto M.'})).status,200);
   assert.equal((await call('/api/family-members/'+beto,'tok-ana','PATCH',{name:'Beto M.',active:true,phoneNumber:null})).status,200);
   // Un integrante sin cuenta (modo anterior) sigue administrándose como siempre.
   assert.equal((await call('/api/family-members/'+carla,'tok-ana','PATCH',{phoneNumber:'+54 9 11 0000 0003'})).status,200);
   const clash=await call('/api/family-members','tok-ana','POST',{name:'Doble',phoneNumber:'54-9-11-0000-0003'});
   assert.equal(clash.status,409);assert.match((await json(clash)).error,/número/);
-  assert.equal((await json(await call('/api/family-members','tok-ana'))).members.find((m:any)=>m.id===ana).linked,true);
+  const listed=(await json(await call('/api/family-members','tok-ana'))).members.find((m:any)=>m.id===ana);
+  assert.equal(listed.linked,true);assert.equal(listed.role,'admin');
  });
  await t.test('vinculación: código de un solo uso enviado desde el número a vincular',async()=>{
   assert.equal(parseLinkCommand('  vincular abcd-2345 '),'ABCD2345');assert.equal(parseLinkCommand('Gasté 1000'),null);assert.equal(parseLinkCommand('vincular'),null);

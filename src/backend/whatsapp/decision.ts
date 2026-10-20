@@ -4,14 +4,14 @@ import {catalogRows} from '../family/repository';
 import type {ApiExpense} from '../../shared/apiTypes';
 import {InterpretationError,parseInterpretation,referenceDate,validateDraft,validatePatch,type CardEntry,type CatalogEntry,type DraftValidation,type InterpretationContext} from './candidate';
 import {applyCandidatePatch,type DraftField,type DraftPatch,type ExpenseDraft} from './draft';
-import {classifyPatch,deterministicAnswer,genericCardCorrection,hasCorrectionMarker,isCancel} from './intent';
+import {classifyPatch,deterministicAnswer,genericCardCorrection,hasCorrectionMarker,householdMarker,isCancel} from './intent';
 import {findCorrectableExpense,type Conversation} from './conversation';
 import {REPLIES,draftSummary,fieldNotice} from './replies';
 import {conversationTtlMinutes} from './config';
 import type {InboxRow} from './repository';
 import type {Interpreter} from './interpretation';
-export type Member=CatalogEntry&{phone_number:string|null};
-export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized'|'linked'|'link_failed';
+export type Member=CatalogEntry&{phone_number:string|null;role?:'admin'|'member'};
+export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized'|'linked'|'link_failed'|'query'|'query_denied';
 export interface Catalog {familyCurrency:string;categories:CatalogEntry[];cards:CardEntry[];member:Member}
 // Lo que decide un mensaje (fuera de la transacción); se aplica dentro de ella.
 export type Decision=
@@ -29,6 +29,7 @@ export function draftFromExpense(e:ApiExpense,today:string):ExpenseDraft{
  const draft:ExpenseDraft={referenceDate:today,editingExpenseId:e.id,amount:{value:e.amount,evidence:null},currency:{value:e.currency,evidence:null},
   date:{value:e.date,evidence:null},description:{value:e.description,evidence:null},category:{value:e.categoryId,evidence:null},paymentMethod:{value:e.paymentMethod,evidence:null}};
  if(e.merchant)draft.merchant={value:e.merchant,evidence:null};
+ if(e.scope==='household')draft.scope='household';
  if(e.cardId||CARD_METHODS.includes(e.paymentMethod))draft.card={value:e.cardId,evidence:null};
  return draft;
 }
@@ -94,6 +95,7 @@ export async function decide(pool:Pool,interpret:Interpreter,row:InboxRow,at:Dat
   return {kind:'reply',outcome:'unrecognized',reply:editing?REPLIES.correctionUnclear(summary()):REPLIES.help};
  }
  const next=applyCandidatePatch(base,classified.patch,failed);
+ if(householdMarker(text))next.scope='household';
  return {kind:'update',draft:next,result:validateDraft(next,{...catalog,defaultCurrency:catalog.familyCurrency}),corrected:classified.intent==='correct'||reopened,notice:fieldNotice(Object.values(fieldErrors) as string[])};
 }
 

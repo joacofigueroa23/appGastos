@@ -19,8 +19,8 @@ export function registerAccounts(app:Express,pool:Pool|null,config:SupabaseConfi
   }catch(error){next(error);}
  };
  const profile=async(db:Pool,id:string,email:string|null)=>{
-  const row=(await db.query('SELECT id,name,phone_number FROM appgastos.family_members WHERE id=$1',[id])).rows[0];
-  return {id:row.id as string,name:row.name as string,email,phoneNumber:normalizePhone(row.phone_number),pendingLink:await openLinkCode(db,id)};
+  const row=(await db.query('SELECT id,name,phone_number,role FROM appgastos.family_members WHERE id=$1',[id])).rows[0];
+  return {id:row.id as string,name:row.name as string,email,phoneNumber:normalizePhone(row.phone_number),role:row.role as 'admin'|'member',pendingLink:await openLinkCode(db,id)};
  };
  app.get('/api/auth/me',route(async(_req,res,db)=>{
   const me=sessionMember(res)!;

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useFinance } from '../context/FinanceContext';
-import { useAuth } from '../context/AuthContext';
-import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users, UserRound, LogOut } from 'lucide-react';
+import { useAuth, useRole } from '../context/AuthContext';
+import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users, UserRound, LogOut, PiggyBank, CalendarClock } from 'lucide-react';
 
 interface SidebarProps {
   currentTab: string;
@@ -14,15 +14,20 @@ const reveal = 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:op
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => {
   const { members, activeMemberId, setActiveMemberId, isDemoMode, apiMembers = [] } = useFinance();
   const { mode, member: me, signOut } = useAuth();
-  const session = mode === 'session';
+  const session = mode === 'session', admin = useRole() === 'admin';
   const currentMember = members.find((m) => m.id === activeMemberId) || members[0];
   const selectableMembers = isDemoMode ? members : members.filter((m) => apiMembers.some((api) => api.id === m.id && api.active));
-  const navItems = [
+  // Modo real: el integrante solo ve su panel y su historial; el resto es del administrador (y el backend lo exige igual).
+  const navItems = isDemoMode ? [
     { id: 'dashboard', label: 'Panel Central', icon: LayoutDashboard },
     { id: 'calendar', label: 'Vencimientos & Tarjetas', icon: Calendar },
     { id: 'expenses', label: 'Historial de Gastos', icon: Receipt },
     { id: 'analysis', label: 'Patrones & Balances', icon: BarChart3 },
-    ...(!isDemoMode ? [{ id: 'family', label: 'Tarjetas e integrantes', icon: Users }] : []),
+  ] : [
+    { id: 'dashboard', label: 'Panel Central', icon: LayoutDashboard },
+    { id: 'expenses', label: 'Historial de Gastos', icon: Receipt },
+    ...(admin ? [{ id: 'budgets', label: 'Presupuestos', icon: PiggyBank }, { id: 'fixed', label: 'Gastos fijos', icon: CalendarClock }] : []),
+    ...(admin ? [{ id: 'family', label: 'Tarjetas e integrantes', icon: Users }] : []),
     ...(session ? [{ id: 'profile', label: 'Mi perfil', icon: UserRound }] : []),
   ];
 

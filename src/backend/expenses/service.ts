@@ -1,6 +1,8 @@
 import type { Pool } from 'pg';
 import { validateExpenseWrite } from './validation';
 import { ApiError } from '../shared/errors';
+import { visibleAuthor, type Actor } from '../accounts/policy';
+import { syncPaymentLink } from '../fixed/service';
 import { object, uuid } from '../shared/validators';
 import { findExpense, insertExpense, listExpenses, transaction, updateExpense, type Connection } from './repository';
 import type { ApiExpense, ExpenseWrite, ExpenseFilters } from '../../shared/apiTypes';
@@ -44,19 +46,25 @@ function withAuthor(body: unknown, author: string | undefined, previous?: ApiExp
   if (sent !== undefined && sent !== null && sent !== expected) throw new ApiError(403,'El autor del gasto lo define el servidor y no se puede cambiar.');
   return { ...input, reportedByMemberId: expected };
 }
-export function expenseService(pool: Pool, familyId: string, author?: string) {
+// actor: quién pide. Un member solo ve, edita y borra lo que registró; lo ajeno responde 404 (no revela que existe).
+// Sin actor (el bot, que ya identificó al integrante) no hay límite.
+export function expenseService(pool: Pool, familyId: string, actor?: Actor) {
+  const author = actor?.memberId ?? undefined, only = visibleAuthor(actor);
+  const hidden = (e: ApiExpense) => only !== undefined && e.reportedByMemberId !== only;
   return {
-    list: (filters:ExpenseFilters={}) => listExpenses(pool,familyId,filters),
+    list: (filters:ExpenseFilters={}) => listExpenses(pool,familyId,filters,only),
     async get(id: string) {
       const result = await findExpense(pool,familyId,uuid(id));
-      if (!result) throw new ApiError(404,'Gasto inexistente.');
+      if (!result || hidden(result)) throw new ApiError(404,'Gasto inexistente.');
       return result;
     },
     async createExpense(body: unknown, source: 'manual' | 'whatsapp' = 'manual', connection?: Connection) {
       const input = validateExpenseWrite(withAuthor(body,author));
       const create = async (db: Connection) => {
         await references(db,familyId,input);
-        return insertExpense(db,familyId,input,source);
+        const created = await insertExpense(db,familyId,input,source);
+        await syncPaymentLink(db,familyId,created);
+        return created;
       };
       return connection ? create(connection) : transaction(pool,create);
     },
@@ -67,14 +75,16 @@ export function expenseService(pool: Pool, familyId: string, author?: string) {
       return run(async (db) => {
         await db.query('SELECT id FROM appgastos.expenses WHERE family_id=$1 AND id=$2 FOR UPDATE',[familyId,id]);
         const previous = await findExpense(db,familyId,id);
-        if (!previous) throw new ApiError(404,'Gasto inexistente.');
+        if (!previous || hidden(previous)) throw new ApiError(404,'Gasto inexistente.');
         const input = validateExpenseWrite(withAuthor(body,author,previous),previous);
         await references(db,familyId,input,previous);
-        return updateExpense(db,familyId,id,input);
+        const updated = await updateExpense(db,familyId,id,input);
+        await syncPaymentLink(db,familyId,updated);
+        return updated;
       });
     },
     async delete(id: string) {
-      const result = await pool.query('DELETE FROM appgastos.expenses WHERE family_id=$1 AND id=$2',[familyId,uuid(id)]);
+      const result = await pool.query('DELETE FROM appgastos.expenses WHERE family_id=$1 AND id=$2' + (only ? ' AND reported_by_member_id=$3' : ''),[familyId,uuid(id),...(only ? [only] : [])]);
       if (!result.rowCount) throw new ApiError(404,'Gasto inexistente.');
     },
   };

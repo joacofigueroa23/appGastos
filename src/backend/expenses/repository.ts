@@ -5,7 +5,7 @@ const columns = [
   'e.id', 'e.family_id AS "familyId"', 'to_char(e.date, \'YYYY-MM-DD\') AS date',
   'e.amount::text AS amount', 'e.currency', 'e.merchant', 'e.description',
   'e.category_id AS "categoryId"', 'c.name AS "categoryName"', 'e.payment_method AS "paymentMethod"',
-  'e.card_id AS "cardId"', 'e.reported_by_member_id AS "reportedByMemberId"', 'e.source',
+  'e.card_id AS "cardId"', 'e.reported_by_member_id AS "reportedByMemberId"', 'e.scope', 'e.source',
   'e.created_at AS "createdAt"', 'e.updated_at AS "updatedAt"',
 ].join(', ');
 export async function transaction<T>(pool: Pool, work: (db: PoolClient) => Promise<T>): Promise<T> {
@@ -22,9 +22,12 @@ export async function findExpense(db: Connection, familyId: string, id: string):
   return result.rows[0] ? dto(result.rows[0]) : null;
 }
 // shortcut: sin paginación, paginar al pasar de ~5000 gastos
-export async function listExpenses(db: Connection, familyId: string, query: ExpenseFilters = {}): Promise<ApiExpense[]> {
+// author: limita a lo que registró ese integrante (ver visibleAuthor); undefined = sin límite.
+export async function listExpenses(db: Connection, familyId: string, query: ExpenseFilters = {}, author?: string): Promise<ApiExpense[]> {
   const args: unknown[] = [familyId];
   let filters = '';
+  if (author) { args.push(author); filters += ' AND e.reported_by_member_id=$' + args.length; }
+  if (query.scope) filters += query.scope === 'none' ? ' AND e.scope IS NULL' : (args.push(query.scope), ' AND e.scope=$' + args.length);
   if (query.month) {
     args.push(query.month + '-01');
     filters += ' AND e.date >= $' + args.length + '::date AND e.date < ($' + args.length + '::date + INTERVAL \'1 month\')';
@@ -38,14 +41,14 @@ export async function listExpenses(db: Connection, familyId: string, query: Expe
   return result.rows.map(dto);
 }
 function values(input: ExpenseWrite): unknown[] {
-  return [input.date,input.amount,input.currency,input.merchant,input.description,input.categoryId,input.paymentMethod,input.cardId,input.reportedByMemberId];
+  return [input.date,input.amount,input.currency,input.merchant,input.description,input.categoryId,input.paymentMethod,input.cardId,input.reportedByMemberId,input.scope ?? null];
 }
 export async function insertExpense(db: Connection, familyId: string, input: ExpenseWrite, source: 'manual' | 'whatsapp'): Promise<ApiExpense> {
-  const result = await db.query('INSERT INTO appgastos.expenses (family_id,date,amount,currency,merchant,description,category_id,payment_method,card_id,reported_by_member_id,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',[familyId,...values(input),source]);
+  const result = await db.query('INSERT INTO appgastos.expenses (family_id,date,amount,currency,merchant,description,category_id,payment_method,card_id,reported_by_member_id,scope,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',[familyId,...values(input),source]);
   return (await findExpense(db,familyId,result.rows[0].id))!;
 }
 export async function updateExpense(db: Connection, familyId: string, id: string, input: ExpenseWrite): Promise<ApiExpense> {
-  await db.query('UPDATE appgastos.expenses SET date=$3,amount=$4,currency=$5,merchant=$6,description=$7,category_id=$8,payment_method=$9,card_id=$10,reported_by_member_id=$11 WHERE family_id=$1 AND id=$2',[familyId,id,...values(input)]);
+  await db.query('UPDATE appgastos.expenses SET date=$3,amount=$4,currency=$5,merchant=$6,description=$7,category_id=$8,payment_method=$9,card_id=$10,reported_by_member_id=$11,scope=$12 WHERE family_id=$1 AND id=$2',[familyId,id,...values(input)]);
   return (await findExpense(db,familyId,id))!;
 }
 export async function listCategories(db: Connection, familyId: string) {

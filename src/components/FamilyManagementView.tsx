@@ -2,11 +2,12 @@
 import React,{useState} from 'react';
 import {useFinance} from '../context/FinanceContext';
 import {useAuth} from '../context/AuthContext';
+import {financeApi} from '../services/financeApi';
 import {PAYMENT_LABELS,type CardType} from '../shared/apiTypes';
 
 function ReferenceSection({kind}:{kind:'cards'|'members'}) {
  const {mode}=useAuth(),session=mode==='session';
- const {apiCards=[],apiMembers=[],loading,error,createDatabaseCard,updateDatabaseCard,createDatabaseMember,updateDatabaseMember}=useFinance();
+ const {apiCards=[],apiMembers=[],refresh,loading,error,createDatabaseCard,updateDatabaseCard,createDatabaseMember,updateDatabaseMember}=useFinance();
  const items=kind==='cards'?apiCards:apiMembers;
  const [editing,setEditing]=useState<string|null>(null),[name,setName]=useState(''),[phone,setPhone]=useState(''),[cardType,setCardType]=useState<CardType|''>('');
  const [busy,setBusy]=useState(false),[message,setMessage]=useState<string|null>(null),[failure,setFailure]=useState<string|null>(null);
@@ -24,6 +25,11 @@ function ReferenceSection({kind}:{kind:'cards'|'members'}) {
    }
    setMessage(editing?'Cambios guardados.':(kind==='cards'?'Tarjeta creada.':'Integrante creado.'));reset();
   }catch(e){setFailure(e instanceof Error?e.message:'No se pudo guardar.');}finally{setBusy(false);}
+ }
+ async function changeRole(id:string,role:'admin'|'member'){
+  if(busy)return;setBusy(true);setFailure(null);setMessage(null);
+  try{await financeApi.setRole(id,role);await refresh?.();setMessage(role==='admin'?'Ahora es administrador.':'Ya no es administrador.');}
+  catch(e){setFailure(e instanceof Error?e.message:'No se pudo cambiar el rol.');}finally{setBusy(false);}
  }
  async function toggle(id:string,active:boolean){
   if(busy)return;setBusy(true);setFailure(null);setMessage(null);
@@ -59,13 +65,14 @@ function ReferenceSection({kind}:{kind:'cards'|'members'}) {
   </form>
   <ul className="divide-y divide-slate-100">
    {items.map(item=><li key={item.id} data-reference-id={item.id} className="py-3 flex flex-wrap justify-between gap-3">
-    <div><strong className="text-sm">{item.name}</strong><span className="text-xs text-slate-500 ml-2">{item.active?'Activo':'Inactivo'}{kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked?' · Con cuenta':''}</span>
+    <div><strong className="text-sm">{item.name}</strong><span className="text-xs text-slate-500 ml-2">{item.active?'Activo':'Inactivo'}{kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked?' · Con cuenta':''}{kind==='members'&&apiMembers.find(m=>m.id===item.id)?.role==='admin'?' · Administrador':''}</span>
      {kind==='members'&&<p className="text-xs text-slate-500">{apiMembers.find(m=>m.id===item.id)?.phoneNumber||'Sin teléfono'}</p>}
      {kind==='cards'&&<p className="text-xs text-slate-500">{(t=>t?PAYMENT_LABELS[t]:'Tipo sin definir')(apiCards.find(c=>c.id===item.id)?.cardType)}</p>}
     </div>
     <div className="flex gap-3 text-sm">
      <button type="button" disabled={busy||loading||!!error} aria-label={'Editar '+noun+' '+item.name} onClick={()=>{setEditing(item.id);setName(item.name);setPhone(kind==='members'?(apiMembers.find(m=>m.id===item.id)?.phoneNumber||''):'');setCardType(kind==='cards'?(apiCards.find(c=>c.id===item.id)?.cardType||''):'');setMessage(null);setFailure(null);}} className="text-blue-700">Editar</button>
-     {!(session&&kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked)&&<button type="button" disabled={busy||loading||!!error} aria-label={(item.active?'Desactivar ':'Activar ')+noun+' '+item.name} onClick={()=>void toggle(item.id,item.active)} className={item.active?'text-slate-600':'text-green-700'}>{item.active?'Desactivar':'Activar'}</button>}
+     <button type="button" disabled={busy||loading||!!error} aria-label={(item.active?'Desactivar ':'Activar ')+noun+' '+item.name} onClick={()=>void toggle(item.id,item.active)} className={item.active?'text-slate-600':'text-green-700'}>{item.active?'Desactivar':'Activar'}</button>
+     {session&&kind==='members'&&apiMembers.find(m=>m.id===item.id)?.linked&&(m=>m&&<button type="button" disabled={busy||loading||!!error} aria-label={(m.role==='admin'?'Quitar rol de administrador a ':'Hacer administrador a ')+item.name} onClick={()=>void changeRole(item.id,m.role==='admin'?'member':'admin')} className="text-blue-700">{m.role==='admin'?'Quitar administrador':'Hacer administrador'}</button>)(apiMembers.find(m=>m.id===item.id))}
     </div>
    </li>)}
   </ul>

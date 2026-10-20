@@ -1,7 +1,7 @@
 // Prueba del build con Chrome/Edge instalado. No requiere dependencias adicionales.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -153,6 +153,8 @@ test('carga manual en navegador: persistencia, selección, errores y métricas',
     for (const entry of pending.values()) { clearTimeout(entry.timeout); entry.reject(new Error('Prueba terminada')); }
     browser?.kill();
     server.kill();
+    await delay(300);
+    try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch { /* archivo bloqueado: no debe fallar la prueba */ }
     // Se conserva el perfil temporal para diagnóstico; no se toca el navegador del usuario.
   }
 });

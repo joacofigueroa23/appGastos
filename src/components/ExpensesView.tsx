@@ -3,6 +3,7 @@ import {PAYMENT_CODES,PAYMENT_LABELS} from '../shared/apiTypes';
 import type { ApiExpense } from '../shared/apiTypes';
 import React, { useState } from 'react';
 import { useFinance } from '../context/FinanceContext';
+import { useRole } from '../context/AuthContext';
 import { EXPENSE_CATEGORIES } from '../data/financeCatalog';
 import { totalsByCurrency } from '../utils/finance';
 import {
@@ -33,6 +34,8 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
   const [selectedCard,setSelectedCard]=useState('all');
   const [merchant,setMerchant]=useState('');
   const [deletingId,setDeletingId]=useState<string|null>(null);
+  const admin = useRole() === 'admin';
+  const [selectedScope, setSelectedScope] = useState('all');
   const [selectedType, setSelectedType] = useState<string>('all'); // 'all', 'shared', 'personal', 'installments'
 
   // Filtrado reactivo
@@ -54,7 +57,8 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
       (!selectedMonth||e.date.slice(0,7)===selectedMonth)&&
       (selectedPayment==='all'||e.paymentMethod===PAYMENT_LABELS[selectedPayment as keyof typeof PAYMENT_LABELS])&&
       (selectedCard==='all'||e.cardId===selectedCard)&&
-      (!merchant.trim()||(e.merchant||'').toLowerCase().includes(merchant.trim().toLowerCase()))
+      (!merchant.trim()||(e.merchant||'').toLowerCase().includes(merchant.trim().toLowerCase()))&&
+      (selectedScope==='all'||(selectedScope==='none'?!e.scope:e.scope===selectedScope))
     );
     return matchesSearch && matchesMember && matchesCategory && matchesType && matchesManualFilters;
   });
@@ -174,8 +178,8 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
             />
           </div>
 
-          {/* Filtro por Miembro */}
-          <div>
+          {/* Filtro por Miembro: el integrante solo ve lo suyo, no tiene a quién filtrar */}
+          {(isDemoMode||admin)&&<div>
             <select
               aria-label="Filtrar por miembro de la familia"
               value={selectedMember}
@@ -189,7 +193,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                 </option>
               ))}
             </select>
-          </div>
+          </div>}
 
           {/* Filtro por Categoría */}
           <div>
@@ -215,7 +219,10 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
               <option value="all">Todas las tarjetas</option>{apiCards.map(c=><option key={c.id} value={c.id}>{c.name}{c.active?'':' (inactiva)'}</option>)}
             </select>
             <input aria-label="Filtrar por comercio" placeholder="Filtrar por comercio…" maxLength={200} value={merchant} onChange={e=>setMerchant(e.target.value)} className="text-xs px-3 py-2 border rounded-xl"/>
-            <button type="button" onClick={()=>{setSelectedMonth('');setSelectedPayment('all');setSelectedCard('all');setMerchant('');setSelectedMember('all');setSelectedCategory('all');setSearch('');}} className="text-xs text-blue-700">Limpiar filtros</button>
+            <select aria-label="Filtrar por ámbito" value={selectedScope} onChange={e=>setSelectedScope(e.target.value)} className="text-xs px-3 py-2 border rounded-xl">
+              <option value="all">Personales y de la casa</option><option value="personal">Solo personales</option><option value="household">Solo de la casa</option><option value="none">Sin clasificar</option>
+            </select>
+            <button type="button" onClick={()=>{setSelectedMonth('');setSelectedPayment('all');setSelectedCard('all');setMerchant('');setSelectedMember('all');setSelectedCategory('all');setSelectedScope('all');setSearch('');}} className="text-xs text-blue-700">Limpiar filtros</button>
           </>}
 
           {/* Filtro por Tipo: conservado para el modo anterior */}
@@ -301,6 +308,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                       <span className="font-medium text-slate-700">{expense.category}</span>
                       <span>·</span>
                       <span>{expense.paymentMethod}</span>
+                      {!isDemoMode&&<span className="font-medium">· {expense.scope==='household'?'De la casa':expense.scope==='personal'?'Personal':'Sin clasificar'}</span>}
                       {card && <span>({card.name})</span>}
                       <span>·</span>
                       <span className="font-semibold text-slate-800">

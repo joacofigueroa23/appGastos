@@ -4,9 +4,10 @@ import type {Pool} from 'pg';
 import {resolveFamilyId} from '../expenses/service';
 import {ApiError} from '../shared/errors';
 import {normalizePhone} from '../whatsapp/security';
+import type {Role} from './policy';
 export interface SupabaseConfig {url:string;anonKey:string}
 // Integrante autenticado, resuelto en el servidor: nunca se toma de datos enviados por el cliente.
-export interface SessionMember {id:string;name:string;familyId:string;authUserId:string;email:string|null;phoneNumber:string|null}
+export interface SessionMember {id:string;name:string;familyId:string;authUserId:string;email:string|null;phoneNumber:string|null;role:Role}
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Sin SUPABASE_URL ni SUPABASE_ANON_KEY el servidor sigue con Basic Auth.
 export function supabaseFromEnv(env=process.env):SupabaseConfig|null{
@@ -42,6 +43,7 @@ export const clearSessionCache=()=>cache.clear();
 const PUBLIC_PATHS=['/api/whatsapp/webhook','/api/auth/config'];
 export function sessionAuth(pool:Pool|null,config:SupabaseConfig,fetchImpl:typeof fetch=fetch):RequestHandler{
  return async(req,res,next)=>{
+  res.app.locals.requireSession=true;
   if(!req.path.startsWith('/api')||PUBLIC_PATHS.includes(req.path))return next();
   try{
    const header=req.get('Authorization')||'';
@@ -51,10 +53,10 @@ export function sessionAuth(pool:Pool|null,config:SupabaseConfig,fetchImpl:typeo
    if(!user)return void res.status(401).json({error:'La sesión no es válida o venció. Volvé a iniciar sesión.'});
    if(!pool)throw new ApiError(503,'Configura DATABASE_URL para usar PostgreSQL.');
    const familyId=await resolveFamilyId(pool);
-   const row=(await pool.query('SELECT id,name,phone_number FROM appgastos.family_members WHERE auth_user_id=$1 AND family_id=$2 AND active',[user.id,familyId])).rows[0];
+   const row=(await pool.query('SELECT id,name,phone_number,role FROM appgastos.family_members WHERE auth_user_id=$1 AND family_id=$2 AND active',[user.id,familyId])).rows[0];
    // Misma respuesta para "sin integrante" e "inactivo": no revela el estado de la familia.
    if(!row)return void res.status(403).json({error:'Tu cuenta no está habilitada para esta familia. Pedile acceso a quien administra la app.'});
-   const member:SessionMember={id:row.id,name:row.name,familyId,authUserId:user.id,email:user.email,phoneNumber:normalizePhone(row.phone_number)};
+   const member:SessionMember={id:row.id,name:row.name,familyId,authUserId:user.id,email:user.email,phoneNumber:normalizePhone(row.phone_number),role:row.role};
    res.locals.member=member;
    next();
   }catch(error){next(error);}

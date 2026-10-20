@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import test from 'node:test';
-import {isolatedDatabase,freePort} from './helpers/postgres';
+import {isolatedDatabase,freePort,removeDirectory} from './helpers/postgres';
 import {migrate} from '../scripts/migrate';
 import {seed,INITIAL_FAMILY_ID} from '../scripts/seed';
 import {transaction} from '../src/backend/expenses/repository';
@@ -24,8 +24,8 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
   const browserPath=process.env.MANUAL_TEST_BROWSER||['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
   assert.ok(browserPath,'Configura MANUAL_TEST_BROWSER con un Chrome/Edge instalado.');
   const db=await isolatedDatabase();await migrate(db.pool);await seed(db.pool);
-  const ana=randomUUID(),ghost=randomUUID();
-  const users:Record<string,{id:string;email:string}>={'ana@familia.test':{id:ana,email:'ana@familia.test'},'ghost@familia.test':{id:ghost,email:'ghost@familia.test'}};
+  const ana=randomUUID(),ghost=randomUUID(),boss=randomUUID();
+  const users:Record<string,{id:string;email:string}>={'ana@familia.test':{id:ana,email:'ana@familia.test'},'ghost@familia.test':{id:ghost,email:'ghost@familia.test'},'jefa@familia.test':{id:boss,email:'jefa@familia.test'}};
   const sessions:Record<string,string>={};
   const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization,apikey,content-type,x-client-info,x-supabase-api-version','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS'};
   const supabase=createServer((req,res)=>{
@@ -51,6 +51,7 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
   await new Promise<void>(r=>supabase.listen(0,'127.0.0.1',r));
   const supabaseUrl='http://127.0.0.1:'+(supabase.address() as any).port;
   const member=(await db.pool.query("INSERT INTO appgastos.family_members(family_id,name,auth_user_id) VALUES($1,'Ana',$2) RETURNING id",[INITIAL_FAMILY_ID,ana])).rows[0].id as string;
+  await db.pool.query("INSERT INTO appgastos.family_members(family_id,name,auth_user_id,role) VALUES($1,'Jefa',$2,'admin')",[INITIAL_FAMILY_ID,boss]);
   const category=(await db.pool.query("INSERT INTO appgastos.categories(family_id,name) VALUES($1,'Compras') RETURNING id",[INITIAL_FAMILY_ID])).rows[0].id as string;
   const profile=mkdtempSync(join(tmpdir(),'appgastos-session-test-'));
   const appPort=await freePort(),debugPort=await freePort();
@@ -108,6 +109,10 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await login('ana@familia.test','clave-ok');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Mes del dashboard"]\')'),'No cargó el panel con sesión.');
     assert.ok(!(await text()).includes('Sin integrante especificado'));
+    // Integrante: panel personal y solo su menú.
+    assert.ok((await text()).includes('Mi resumen de gastos'));
+    for(const label of ['Presupuestos','Gastos fijos','Tarjetas e integrantes'])assert.equal(await evaluate('[...document.querySelectorAll("button")].some(b=>b.textContent.trim()==='+JSON.stringify(label)+')'),false,label);
+    assert.equal(await evaluate('!!document.querySelector(\'[aria-label="Integrante del dashboard"]\')'),false);
     // La sesión sobrevive a una recarga.
     await command('Page.reload');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Mes del dashboard"]\')'),'La sesión no se restauró.');
@@ -135,10 +140,44 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     // Cierre de sesión: vuelve al acceso y la API deja de responder con ese token.
     await click('Cerrar sesión');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Email"]\')'),'No cerró la sesión.');
+    // Administrador: ve todo, arma presupuestos y gastos fijos.
+    await login('jefa@familia.test','clave-ok');
+    await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Mes del dashboard"]\')'),'No cargó el panel del administrador.');
+    assert.ok((await text()).includes('Control de Gastos del Hogar'));
+    assert.equal(await evaluate('!!document.querySelector(\'[aria-label="Integrante del dashboard"]\')'),true);
+    await field('[aria-label="Mes del dashboard"]','2026-10');
+    await waitFor(async()=>(await text()).includes('40.000'),'El administrador no ve el gasto de otro integrante.');
+    await click('Presupuestos');
+    await field('[aria-label="Mes del presupuesto"]','2026-10');
+    await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Presupuesto de Compras"]\')'),'No mostró las categorías del presupuesto.');
+    await field('[aria-label="Presupuesto de Compras"]','100000');
+    await evaluate('document.querySelector(\'[aria-label="Presupuesto de Compras"]\').parentElement.querySelector("button").click()');
+    await waitFor(async()=>(await text()).includes('Presupuesto guardado.'),'No guardó el presupuesto.');
+    assert.equal((await db.pool.query("SELECT amount::text a FROM appgastos.budgets WHERE month='2026-10-01'")).rows[0].a,'100000.00');
+    await click('Panel Central');
+    await field('[aria-label="Mes del dashboard"]','2026-10');
+    await waitFor(async()=>(await text()).includes('Presupuesto del mes')&&(await text()).includes('100.000'),'El panel no muestra el presupuesto.');
+    await click('Gastos fijos');
+    await field('[aria-label="Nombre del gasto fijo"]','Colegio');await field('[aria-label="Categoría del gasto fijo"]',category);
+    await field('[aria-label="Importe previsto"]','40000');await field('[aria-label="Fecha de inicio"]','2026-10-01');
+    await click('Crear gasto fijo');
+    await waitFor(async()=>(await text()).includes('Gasto fijo creado.'),'No creó el gasto fijo.');
+    assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.fixed_expenses')).rows[0].n,1);
+    // Vencida (el día 10 de octubre de 2026 ya pasó): queda a la vista y se marca como pagada creando el gasto real.
+    await waitFor(async()=>(await text()).includes('Vencidas sin pagar (1)'),'La obligación vencida no quedó a la vista.');
+    await click('Marcar como pagada');
+    await field('[aria-label="Medio de pago del pago"]','transfer');
+    await click('Confirmar pago');
+    await waitFor(async()=>(await text()).includes('Pago registrado.'),'No registró el pago.');
+    const paid=(await db.pool.query("SELECT e.scope,e.payment_method,o.link_source FROM appgastos.fixed_expense_occurrences o JOIN appgastos.expenses e ON e.id=o.expense_id")).rows;
+    assert.deepEqual(paid.map(r=>[r.scope,r.payment_method,r.link_source]),[['household','transfer','manual']]);
+    await waitFor(async()=>!(await text()).includes('Vencidas sin pagar ('),'Siguió figurando como vencida.');
+    await click('Cerrar sesión');
+    await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Email"]\')'),'No cerró la sesión del administrador.');
     await command('Browser.close');
   }finally{
     ws?.close();
     for(const entry of pending.values()){clearTimeout(entry.timeout);entry.reject(new Error('Prueba terminada'));}
-    browser?.kill();server.kill();supabase.close();await db.stop();
+    browser?.kill();server.kill();supabase.close();await db.stop();await delay(300);removeDirectory(profile);
   }
 });
