@@ -244,7 +244,7 @@ export async function confirmDocument(pool:Pool,db:Connection,doc:DocRow,viewer:
   return '✅ Importé '+ids.length+' consumos del resumen'+(refunds.length?' y apliqué '+refunds.length+' devolución(es) restando del gasto original':'')+'. Los que dejaste afuera no se registraron.';
  }
  // Ticket o comprobante de pago.
- if(draft.noExpense){await finish(db,doc,'confirmed',null,{noExpense:true});return '✅ Listo: no registré ningún gasto ('+(draft.noExpenseReason||'indicaste que no lo es')+').';}
+ if(draft.noExpense){await finish(db,doc,'confirmed',null,{noExpense:true,reason:draft.noExpenseReason});return '✅ Listo: no registré ningún gasto ('+(draft.noExpenseReason||'indicaste que no lo es')+').';}
  if(draft.linkExpenseId){
   const r=await db.query('UPDATE appgastos.expenses SET document_id=$2 WHERE family_id=$1 AND id=$3 AND document_id IS NULL'+(owner.role==='member'?' AND reported_by_member_id=$4':'')+' RETURNING id',
    [doc.family_id,doc.id,draft.linkExpenseId,...(owner.role==='member'?[doc.member_id]:[])]);

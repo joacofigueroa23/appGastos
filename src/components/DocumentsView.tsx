@@ -139,7 +139,15 @@ export function DocumentsView(){
    return d.kind==='card_statement'?statement(d):d.kind==='pending_invoice'?invoice(d,doc.mine):receipt(d);
   }
   if(doc.state==='failed')return <p className="text-sm text-red-700">No pude leer este comprobante. Probá con una foto más nítida o cargá el gasto a mano.</p>;
-  if(doc.state==='confirmed')return <p className="text-sm text-green-700">Ya está registrado. Los movimientos se ven en el Historial de Gastos.</p>;
+  if(doc.state==='confirmed'){
+   // "Registrado" = el comprobante se cerró; no siempre crea un gasto. Se dice qué pasó.
+   const r=doc.result||{};
+   const text=r.noExpense?'Se cerró SIN crear un gasto'+(r.reason?': '+String(r.reason):'.')+' Si sí era un gasto, cargalo a mano desde el Historial.'
+    :r.linkedExpenseId?'Se asoció a un gasto que ya tenías cargado (no se creó otro). Lo ves en el Historial de Gastos.'
+    :r.occurrenceId?'Se asoció a una obligación pendiente: sigue sin pagar y no es un gasto.'
+    :'Ya está registrado. Los movimientos se ven en el Historial de Gastos.';
+   return <p className={'text-sm '+(r.noExpense?'text-amber-800':'text-green-700')}>{text}</p>;
+  }
   if(doc.state==='cancelled')return <p className="text-sm text-slate-500">Descartado: no se registró nada.</p>;
   return <p role="status" className="text-sm text-slate-500">Estoy leyendo el comprobante…</p>;
  };

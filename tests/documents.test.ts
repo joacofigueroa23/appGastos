@@ -283,7 +283,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   await send(ANA,'cardpay');d=await lastDoc();assert.equal(d.draft.noExpense,true);
   assert.match(replies.filter(r=>r.to===ANA).at(-1)!.text,/pago de un resumen de tarjeta/);
   assert.match(await say(ANA,'confirmar'),/no registré ningún gasto/);assert.equal(await expenses(),count);
-  assert.deepEqual((await lastDoc()).result,{noExpense:true});
+  {const r=(await lastDoc()).result;assert.equal(r.noExpense,true);assert.match(r.reason,/resumen de tarjeta/);}
   await clean();
  });
 
