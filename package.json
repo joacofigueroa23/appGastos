@@ -13,7 +13,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:member-account": "tsx scripts/member-account.ts",
-    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts tests/whatsapp-conversation.test.ts tests/auth.test.ts tests/accounts.test.ts tests/roles.test.ts tests/budgets.test.ts tests/fixed.test.ts tests/bot-queries.test.ts",
+    "test": "node --import tsx --test tests/finance.test.ts tests/database.test.ts tests/manual-core.test.ts tests/whatsapp.test.ts tests/whatsapp-conversation.test.ts tests/auth.test.ts tests/accounts.test.ts tests/roles.test.ts tests/budgets.test.ts tests/fixed.test.ts tests/bot-queries.test.ts tests/documents-unit.test.ts tests/documents.test.ts",
     "test:browser": "node --import tsx --test tests/database-browser.test.ts tests/manual-core-browser.test.ts tests/accounts-browser.test.ts",
     "test:legacy-browser": "tsx scripts/test-legacy-browser.ts"
   },

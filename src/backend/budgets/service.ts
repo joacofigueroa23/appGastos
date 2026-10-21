@@ -6,7 +6,7 @@ import {uuid} from '../shared/validators';
 import {monthStart} from '../shared/route';
 import type {BudgetLine,BudgetReport} from '../../shared/apiTypes';
 const CURRENCY='ARS'; // primera versión: pesos, como el dashboard
-const SPENT=`(SELECT category_id,sum(amount) AS spent FROM appgastos.expenses
+const SPENT=`(SELECT category_id,sum(amount) AS spent FROM appgastos.expense_lines
   WHERE family_id=$1 AND currency=$3 AND date>=$2::date AND date<($2::date+interval '1 month') GROUP BY category_id)`;
 // Un solo lugar calcula el consumo: la fecha efectiva del gasto, su categoría y su importe actuales. Editar, mover de categoría,
 // cambiar la fecha o borrar un gasto se refleja solo, porque no se guarda ningún acumulado.

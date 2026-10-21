@@ -35,6 +35,8 @@ export interface Expense {
   notes?: string;
   source: 'whatsapp' | 'manual' | 'receipt';
   scope?: 'personal' | 'household' | null; // solo modo real: null = sin clasificar
+  categoryIds?: string[]; // modo real: la categoría del gasto o las de sus conceptos
+  items?: { description: string; categoryName: string; amount: string }[]; // conceptos de un ticket con varias categorías
   whatsappMessage?: string;
   createdAt: string;
 }

@@ -9,6 +9,7 @@ import {normalizePhone} from './security';
 import type {InboxRow} from './repository';
 import type {Catalog,Decision,Member,Outcome} from './decision';
 import {attemptLink} from '../accounts/linking';
+import {receiveDocument} from '../documents/service';
 // La conversación cambió entre la lectura y la transacción: se reprocesa el mensaje.
 export class ConversationChanged extends Error {}
 export async function commit(pool:Pool,db:PoolClient,row:InboxRow,at:Date,decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null){
@@ -40,6 +41,13 @@ export async function commit(pool:Pool,db:PoolClient,row:InboxRow,at:Date,decisi
  };
  switch(decision.kind){
   case 'reply':outcome=decision.outcome;reply=decision.reply;if(outcome==='nothing_to_cancel'||outcome==='unauthorized'||outcome==='unsupported')conversationId=null;break;
+  case 'document':{
+   // Imagen o PDF de un integrante vinculado: crea el documento (aún no es un gasto) en esta misma transacción.
+   const member=(await db.query('SELECT active,phone_number FROM appgastos.family_members WHERE family_id=$1 AND id=$2 FOR SHARE',[row.family_id,decision.memberId])).rows[0];
+   if(!member?.active||normalizePhone(member.phone_number)!==row.sender){outcome='unauthorized';reply=REPLIES.noLongerAuthorized;conversationId=null;break;}
+   const result=await receiveDocument(db,row,{id:decision.memberId},decision.media);
+   outcome=result.outcome;reply=result.reply;conversationId=null;break;
+  }
   case 'link':{
    // Vinculación de un número con una cuenta: sin Gemini ni conversación; se resuelve y completa en esta transacción.
    const result=await attemptLink(db,row.family_id,row.sender,decision.code);

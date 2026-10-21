@@ -1,3 +1,4 @@
+import type { DocumentDto } from '../shared/documentTypes';
 import type { FixedExpense, FixedOccurrence, UnlinkedPayment, BudgetReport, ApiCard, ApiCategory, ApiExpense, ApiMember, AuthMember, Role, ExpenseWrite, CardWrite, MemberWrite, ExpenseFilters } from '../shared/apiTypes';
 export class ApiRequestError extends Error { constructor(public status: number, message: string) { super(message); } }
 // Con sesión individual (Supabase) cada pedido lleva el token; sin ella el navegador usa Basic Auth por su cuenta.
@@ -29,6 +30,12 @@ export const financeApi = {
   unlinkedPayments: (month:string) => request<{expenses:UnlinkedPayment[]}>('/api/fixed-expenses/unlinked?month='+month),
   linkPayment: (occurrenceId:string,expenseId:string) => request<void>('/api/fixed-expenses/occurrences/'+occurrenceId+'/link','POST',{expenseId}),
   unlinkPayment: (occurrenceId:string) => request<void>('/api/fixed-expenses/occurrences/'+occurrenceId+'/link','DELETE'),
+  documents: () => request<{documents:DocumentDto[]}>('/api/documents'),
+  document: (id:string) => request<{document:DocumentDto}>('/api/documents/'+id),
+  editDocument: (id:string,body:{edits?:unknown[];kind?:string}) => request<{document:DocumentDto}>('/api/documents/'+id,'PATCH',body),
+  uploadDocument: (filename:string,contentBase64:string) => request<{document:DocumentDto}>('/api/documents/upload','POST',{filename,contentBase64}),
+  confirmDocument: (id:string,input:{occurrenceId?:string;newFixedCategoryId?:string}={}) => request<{message:string;document:DocumentDto}>('/api/documents/'+id+'/confirm','POST',input),
+  cancelDocument: (id:string) => request<{message:string;document:DocumentDto}>('/api/documents/'+id+'/cancel','POST',{}),
   me: () => request<{member:AuthMember}>('/api/auth/me'),
   createLinkCode: () => request<{code:string;expiresAt:string}>('/api/auth/whatsapp-link','POST'),
   unlinkWhatsApp: () => request<void>('/api/auth/whatsapp-link','DELETE'),

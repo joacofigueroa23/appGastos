@@ -77,6 +77,8 @@ export function expenseService(pool: Pool, familyId: string, actor?: Actor) {
         const previous = await findExpense(db,familyId,id);
         if (!previous || hidden(previous)) throw new ApiError(404,'Gasto inexistente.');
         const input = validateExpenseWrite(withAuthor(body,author,previous),previous);
+        if (previous.items?.length && (input.amount !== previous.amount || input.currency !== previous.currency || input.categoryId !== previous.categoryId))
+          throw new ApiError(400,'Este gasto tiene conceptos por categoría: su importe, moneda y categoría se corrigen desde el comprobante, no acá.');
         await references(db,familyId,input,previous);
         const updated = await updateExpense(db,familyId,id,input);
         await syncPaymentLink(db,familyId,updated);

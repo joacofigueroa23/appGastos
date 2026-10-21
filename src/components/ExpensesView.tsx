@@ -46,7 +46,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
       (e.notes && e.notes.toLowerCase().includes(search.toLowerCase()));
 
     const matchesMember = selectedMember === 'all' || (e.reportedByMemberId || e.paidByMemberId) === selectedMember;
-    const matchesCategory = selectedCategory === 'all' || (isDemoMode?e.category:e.categoryId) === selectedCategory;
+    const matchesCategory = selectedCategory === 'all' || (isDemoMode ? e.category === selectedCategory : (e.categoryIds || [e.categoryId]).includes(selectedCategory));
 
     let matchesType = true;
     if (selectedType === 'shared') matchesType = e.isShared;
@@ -315,6 +315,8 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
                         {member?.avatar} {member?.name || (isDemoMode?'Familiar':'Sin autor identificado')}
                       </span>
                     </div>
+
+                    {expense.items&&<p className="text-xs text-slate-500">{expense.items.map(i=>i.description+' → '+i.categoryName+' '+formatCurrency(Number(i.amount),expense.currency)).join(' · ')}</p>}
 
                     {expense.installmentTotal > 1 && (
                       <div className="flex items-center gap-1.5 text-xs text-purple-700 font-semibold pt-0.5">
