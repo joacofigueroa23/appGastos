@@ -9,7 +9,7 @@ import {DocumentError} from '../src/backend/documents/validate';
 import {referenceDate} from '../src/backend/whatsapp/candidate';
 import type {Extraction} from '../src/backend/documents/types';
 
-const BLANK:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:'ARS',totalAmount:null,taxesIncluded:null,items:[],discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,warnings:[],missingFields:[]};
+const BLANK:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:'ARS',totalAmount:null,taxesIncluded:null,items:[],discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,category:null,warnings:[],missingFields:[]};
 const x=(o:Partial<Extraction>):Extraction=>({...BLANK,...o});
 const item=(description:string,amount:string,category:string|null=null)=>({description,amount,category});
 const line=(date:string|null,merchant:string,amount:string,over:Record<string,unknown>={})=>({date,merchant,amount,currency:'ARS',kind:'purchase' as const,installmentCurrent:null,installmentTotal:null,category:null,...over});

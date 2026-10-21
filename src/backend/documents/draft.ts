@@ -26,7 +26,7 @@ export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_r
  let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:categoryId(ctx,i.category),excluded:false}));
  let total=e.totalAmount;
  if(total===null&&items.length){total=fromCents(items.reduce((n,i)=>n+toCents(i.amount),0));notes.push('El comprobante no muestra un total legible: usé la suma de los conceptos.');}
- if(!items.length&&total)items=[{id:1,description:e.merchant||(kind==='payment_receipt'?'Pago':'Compra'),amount:total,categoryId:null,excluded:false}];
+ if(!items.length&&total)items=[{id:1,description:e.merchant||(kind==='payment_receipt'?'Pago':'Compra'),amount:total,categoryId:categoryId(ctx,e.category),excluded:false}];
  const noExpense=kind==='payment_receipt'&&(e.isCardPayment===true||e.isOwnTransfer===true);
  const draft:ReceiptDraft={
   kind,scope:householdHint?'household':'personal',currency,date:e.documentDate,merchant:e.merchant,

@@ -9,6 +9,6 @@ export interface Extraction {
  taxesIncluded:boolean|null;items:ExtractedItem[];discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];
  paymentStatus:'paid'|'unpaid'|'unknown';paymentMethod:PaymentCode|null;paymentReference:string|null;isCardPayment:boolean|null;isOwnTransfer:boolean|null;
  statementPeriod:string|null;closingDate:string|null;statementTotals:{currency:string;total:string}[];lines:ExtractedLine[];
- invoiceReference:string|null;concept:string|null;warnings:string[];missingFields:string[];
+ invoiceReference:string|null;concept:string|null;category:string|null;warnings:string[];missingFields:string[];
 }
 export interface ModelUsage {model:string;promptTokens:number|null;outputTokens:number|null;totalTokens:number|null;estimatedCostUsd:number|null;ms:number}
