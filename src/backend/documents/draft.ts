@@ -94,6 +94,11 @@ export function receiptProblems(d:ReceiptDraft,ctx:DraftContext):string[]{
  return problems;
 }
 
+// Registro automático por el bot: solo un ticket o comprobante de pago COMPLETO (importe, fecha, categorías y medio de pago válidos), que no sea
+// "no es gasto", ni coincida con un gasto ya cargado (eso se pregunta). Todo lo demás espera la respuesta del usuario.
+export const autoRegisterEnabled=()=>process.env.DOCUMENT_AUTO_REGISTER!=='false';
+export const canAutoRegister=(d:ReceiptDraft,ctx:DraftContext)=>autoRegisterEnabled()&&!d.noExpense&&!d.linkExpenseId&&d.duplicates.length===0&&receiptProblems(d,ctx).length===0;
+
 // ---- Ediciones del borrador. Las usan el chat y la web: así hay una sola regla.
 export type Edit=
  |{type:'scope';value:'personal'|'household'}|{type:'date';value:string}|{type:'total';value:string}

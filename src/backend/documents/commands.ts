@@ -4,7 +4,7 @@ import type {DocumentKind,DraftItem,ReceiptDraft} from './types';
 // Comandos de texto sobre un comprobante pendiente. Se reconocen por reglas (no por Gemini): son determinísticos y corregir un
 // borrador no vuelve a llamar al modelo. Un mensaje que no encaja en ninguna forma NO es un comando y sigue su camino normal.
 export type Command=
- |{type:'confirm';code?:string}|{type:'cancel';code?:string}|{type:'scope';value:'personal'|'household'}
+ |{type:'undo'}|{type:'confirm';code?:string}|{type:'cancel';code?:string}|{type:'scope';value:'personal'|'household'}
  |{type:'date';raw:string}|{type:'total';raw:string}|{type:'payment';value:PaymentCode}|{type:'noExpense'}|{type:'expense'}|{type:'link'}|{type:'unlink'}
  |{type:'kind';value:DocumentKind}|{type:'exclude';item:string}|{type:'itemCategory';item:string;category:string};
 const clean=(text:string)=>normalizeName(text).replace(/[.,;:!¡?¿"'«»]/g,' ').replace(/\s+/g,' ').trim();
@@ -15,6 +15,7 @@ export function parseCommand(text:string):Command|null{
  const t=clean(text);let m:RegExpExecArray|null;
  if((m=new RegExp('^(?:confirmar|confirmo|confirmado|si|ok|dale|listo|registrar|registralo|guardar|guardalo|aceptar)(?: '+CODE+')?$').exec(t)))return {type:'confirm',code:m[1]};
  if((m=new RegExp('^(?:cancelar|cancela|descartar|descarta|descartalo|no)(?: '+CODE+')?$').exec(t)))return {type:'cancel',code:m[1]};
+ if(/^(?:deshacer|deshacelo|deshace|anular|anulalo)(?: (?:el )?(?:ultimo|registro))?$/.test(t))return {type:'undo'};
  if(/^(?:es |gasto )?(?:de la casa|del hogar|casa)$/.test(t))return {type:'scope',value:'household'};
  if(/^(?:es |gasto )?personal$/.test(t))return {type:'scope',value:'personal'};
  if((m=/^(?:con |pague con |fue con |es )?(efectivo|debito|credito|transferencia|billetera|mercado pago)$/.exec(t))){const value=paymentEvidence(m[1]);if(value)return {type:'payment',value};}

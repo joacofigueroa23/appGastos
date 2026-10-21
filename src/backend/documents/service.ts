@@ -11,7 +11,7 @@ import {documentLimits} from './limits';
 import {declaredMime,DocumentError,failureReply,REJECTED_TYPE_REPLY,validateMedia} from './validate';
 import type {MediaFetcher} from './media';
 import type {DocumentExtractor} from './extraction';
-import {applyEdit,BLOCKED,buildInvoiceDraft,buildReceiptDraft,buildStatementDraft,classify,receiptProblems,type DraftContext,type Edit} from './draft';
+import {applyEdit,BLOCKED,canAutoRegister,buildInvoiceDraft,buildReceiptDraft,buildStatementDraft,classify,receiptProblems,type DraftContext,type Edit} from './draft';
 import {withReceiptDuplicates,withStatementDuplicates} from './duplicates';
 import {fromCents,includedItems,primaryCategory,toCents} from './reconcile';
 import {COMMAND_HELP,invoiceSummary,receiptSummary,statementSummary,unknownSummary} from './summary';
@@ -116,7 +116,9 @@ export function documentProcessor(pool:Pool,deps:DocumentDeps){
     const r=await db.query(`UPDATE appgastos.documents SET state='needs_review',kind=$3,extraction=$4,draft=$5,usage=$6,error_code=NULL,lease_token=NULL,lease_until=NULL,updated_at=now()
      WHERE id=$1 AND lease_token=$2 AND state='processing'`,[doc.id,doc.lease_token,built.kind,JSON.stringify(extraction),built.draft?JSON.stringify(built.draft):null,JSON.stringify(usage)]);
     if(!r.rowCount)return; // otro proceso tomó el documento (lease vencido) o fue cancelado: no se pisa su resultado
-    await enqueueReply(db,doc,'summary','document_ready',built.reply);
+    // Completo y sin dudas: el bot lo registra solo y avisa; si no, deja el borrador para que el usuario lo complete.
+    const auto=await tryAutoRegister(pool,db,{...doc,kind:built.kind,extraction} as DocRow,built.draft,viewer,ctx);
+    await enqueueReply(db,doc,auto?'registered':'summary',auto?'document_ready':'document_ready',auto??built.reply);
    });
   }catch(error){await fail(doc,error);}
   return true;
@@ -264,7 +266,31 @@ export async function confirmDocument(pool:Pool,db:Connection,doc:DocRow,viewer:
  if(categoriesUsed.size>1)await attachItems(db,doc.family_id,expense.id,items);
  await db.query('UPDATE appgastos.expenses SET document_id=$2 WHERE id=$1',[expense.id,doc.id]);
  await finish(db,doc,'confirmed',null,{expenseId:expense.id,categories:categoriesUsed.size});
- return '✅ Registrado: '+draft.description+' por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+(categoriesUsed.size>1?' repartido en '+categoriesUsed.size+' categorías':'')+'.';
+ const catName=(id:string|null)=>ctx.categories.find(c=>c.id===id)?.name;
+ return '✅ Registrado: '+draft.description+' por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+(categoriesUsed.size>1?' repartido en '+categoriesUsed.size+' categorías':catName(items[0].categoryId)?' en '+catName(items[0].categoryId):'')+'.';
+}
+// Registro automático: se intenta dentro de un SAVEPOINT; si algo falla, se deshace solo eso y el comprobante queda como borrador normal.
+export const UNDO_HINT='\nSi está mal, respondé *deshacer* y lo borro.';
+export async function tryAutoRegister(pool:Pool,db:Connection,doc:DocRow,draft:Draft|null,viewer:Viewer,ctx:DraftContext):Promise<string|null>{
+ if(!draft||(draft.kind!=='purchase_receipt'&&draft.kind!=='payment_receipt')||!canAutoRegister(draft,ctx))return null;
+ await db.query('SAVEPOINT auto_register');
+ try{
+  const message=await confirmDocument(pool,db,{...doc,state:'needs_review',draft},viewer);
+  await db.query('RELEASE SAVEPOINT auto_register');
+  return message+UNDO_HINT;
+ }catch(error){
+  await db.query('ROLLBACK TO SAVEPOINT auto_register');
+  if(error instanceof DocumentActionError||error instanceof ApiError)return null;
+  throw error;
+ }
+}
+// "Deshacer": borra el gasto que el bot registró solo (o que confirmaste hace poco) y deja el comprobante descartado. Solo los últimos 60 minutos y solo lo tuyo.
+async function undoLast(db:Connection,family:string,member:{id:string}):Promise<string>{
+ const doc=(await db.query(`SELECT id,result FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state='confirmed' AND result->>'expenseId' IS NOT NULL AND confirmed_at>now()-interval '60 minutes' ORDER BY confirmed_at DESC LIMIT 1 FOR UPDATE`,[family,member.id])).rows[0];
+ if(!doc)return 'No encontré nada reciente para deshacer (solo puedo deshacer lo registrado en la última hora). Para borrar un gasto usá el Historial.';
+ await db.query('DELETE FROM appgastos.expenses WHERE family_id=$1 AND id=$2 AND reported_by_member_id=$3',[family,doc.result.expenseId,member.id]);
+ await db.query("UPDATE appgastos.documents SET state='cancelled',result=$2,updated_at=now() WHERE id=$1",[doc.id,JSON.stringify({undone:true})]);
+ return '↩️ Listo, borré el gasto que acababa de registrar. El comprobante quedó descartado.';
 }
 // Una devolución resta del gasto original (regla aprobada): amount queda neto y refunded_amount deja constancia. Si el gasto tiene conceptos,
 // se agrega un concepto negativo en su categoría principal para que la suma siga siendo el importe (la base también lo exige).
@@ -307,6 +333,7 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
  const cmd=parseCommand(text);
  if(!cmd)return null;
  const code=('code' in cmd&&cmd.code?cmd.code.toUpperCase():undefined);
+ if(cmd.type==='undo')return {outcome:'document_command' as const,reply:await undoLast(db,family,member)};
  const open:DocRow[]=(await db.query("SELECT * FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state IN ('received','processing','needs_review') ORDER BY created_at FOR UPDATE",[family,member.id])).rows;
  const say=(reply:string)=>({outcome:'document_command' as const,reply});
  // Confirmar de nuevo algo ya registrado (doble toque, reintento) devuelve el resultado sin registrar otra vez. Con código se busca
@@ -362,7 +389,9 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
    }
   }
   const {draft}=await editDocument(db,doc,edits,member.role);
-  return say(show(draft));
+  // Si con esta corrección el comprobante quedó completo, el bot lo registra solo.
+  const auto=await tryAutoRegister(pool,db,doc,draft,{memberId:member.id,role:member.role},ctx);
+  return say(auto??show(draft));
  }catch(error){
   if(error instanceof DocumentActionError||error instanceof ApiError)return say(error.message+' '+COMMAND_HELP);
   throw error;
