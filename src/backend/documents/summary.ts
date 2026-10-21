@@ -27,6 +27,11 @@ export function receiptSummary(d:ReceiptDraft,ctx:DraftContext,code:string):stri
  }
  if(d.kind==='payment_receipt'&&!d.noExpense&&!d.linkExpenseId)lines.push('Si es una transferencia entre tus cuentas o el pago de una tarjeta, respondé *no es gasto*.');
  const problems=receiptProblems(d,ctx);
+ const noCategory=d.noExpense||d.linkExpenseId?[]:includedItems(d).filter(i=>!i.categoryId);
+ if(noCategory.length){
+  lines.push('No tengo una categoría para '+noCategory.slice(0,4).map(i=>'«'+i.description+'»').join(', ')+'. Elegí una de las tuyas: '+ctx.categories.filter(c=>c.active).map(c=>c.name).join(', ')+'.');
+  lines.push('Respondé por ejemplo «'+noCategory[0].description.toLowerCase()+' va en '+(ctx.categories.find(c=>c.active)?.name||'otros').toLowerCase()+'» y lo registro.');
+ }
  if(problems.length)lines.push('Antes de registrar necesito: '+problems.join(', ')+'.');
  lines.push('Todavía no registré nada. '+COMMAND_HELP,'Código: '+code);
  return lines.join('\n');

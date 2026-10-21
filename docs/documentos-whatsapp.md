@@ -30,6 +30,12 @@ El total declarado nunca se modifica: una diferencia entre ítems y total aparec
 
 La pantalla Comprobantes tiene «Subir archivo». Acepta foto (JPG/PNG), PDF, `.csv` y `.xlsx` (primera hoja, hasta 200 filas de datos y 5 MB). Se lee en el momento, **no se guarda el archivo ni su nombre**, y queda un borrador para revisar: cada fila se clasifica por categoría y la pantalla muestra el total por categoría de lo seleccionado. Nada se registra hasta confirmar. Requiere sesión de integrante (con Basic Auth no se puede subir). El mismo archivo no se procesa dos veces. Las planillas se leen sin dependencias externas (un `.xlsx` es un ZIP con XML) con tope de tamaño descomprimido; fórmulas y macros no se ejecutan, solo se leen valores.
 
+## Registro automático por el bot
+
+Un **ticket o comprobante de pago completo** (importe, fecha, categorías y medio de pago válidos) que no coincide con un gasto ya cargado y no es «no es gasto» **se registra solo** y el bot avisa («✅ Registrado… en Ropa. Si está mal, respondé *deshacer*»). Si falta algo, no registra: dice qué falta y, si es la categoría, «No tengo una categoría para X» con la lista de las tuyas; al responder «el suéter va en ropa» (o completar el dato que falte) lo registra en ese momento. Si hay un gasto parecido propio, pregunta si vincular en vez de duplicar. Facturas y resúmenes de tarjeta **nunca** se registran solos.
+
+**Deshacer:** «deshacer» borra el último gasto que registraste por comprobante (solo de la última hora y solo el tuyo) y deja el comprobante descartado. Para apagar el registro automático: `DOCUMENT_AUTO_REGISTER=false`.
+
 ## Comandos de chat (sin Gemini)
 
 `confirmar [código]`, `cancelar [código]`, `es personal` / `es del hogar`, `efectivo` / tarjeta, `fecha 10/10`, `total 19.000`, `no es un gasto`, `vincular`, `es una factura` / `es un ticket`, `excluir <ítem>`, `<ítem> va en <categoría>`. Con varios borradores abiertos se usa el código de 4 caracteres. Un "ok" suelto solo confirma un borrador reciente y sin conversación de gasto abierta.
@@ -50,7 +56,7 @@ La pantalla Comprobantes tiene «Subir archivo». Acepta foto (JPG/PNG), PDF, `.
 
 Obligatorias para leer documentos: `GEMINI_API_KEY`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_PHONE_NUMBER_ID` (las mismas de la Fase 1).
 
-Opcionales (valor por defecto entre paréntesis): `GEMINI_DOCUMENT_MODEL`, `DOCUMENT_MAX_IMAGE_BYTES` (5 MB), `DOCUMENT_MAX_PDF_BYTES` (10 MB), `DOCUMENT_MAX_PDF_PAGES` (10), `DOCUMENT_MAX_ITEMS` (80), `DOCUMENT_MAX_LINES` (200), `DOCUMENT_TIMEOUT_MS` (60000), `DOCUMENT_MAX_ATTEMPTS` (3), `DOCUMENT_MAX_PER_HOUR` (20 por integrante), `DOCUMENT_DRAFT_TTL_HOURS` (168), `GEMINI_INPUT_PRICE_PER_MTOK` / `GEMINI_OUTPUT_PRICE_PER_MTOK` (para estimar costo; sin ellos no se estima).
+Opcionales (valor por defecto entre paréntesis): `GEMINI_DOCUMENT_MODEL`, `DOCUMENT_MAX_IMAGE_BYTES` (5 MB), `DOCUMENT_MAX_PDF_BYTES` (10 MB), `DOCUMENT_MAX_PDF_PAGES` (10), `DOCUMENT_MAX_ITEMS` (80), `DOCUMENT_MAX_LINES` (200), `DOCUMENT_TIMEOUT_MS` (60000), `DOCUMENT_MAX_ATTEMPTS` (3), `DOCUMENT_MAX_PER_HOUR` (20 por integrante), `DOCUMENT_DRAFT_TTL_HOURS` (168), `DOCUMENT_AUTO_REGISTER` (activo; `false` lo apaga), `GEMINI_INPUT_PRICE_PER_MTOK` / `GEMINI_OUTPUT_PRICE_PER_MTOK` (para estimar costo; sin ellos no se estima).
 
 ## Guía de despliegue (requiere autorización explícita)
 
