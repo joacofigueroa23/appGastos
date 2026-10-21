@@ -82,7 +82,7 @@ export function parseExtraction(raw:unknown,categories:string[]):Extraction{
   paymentStatus:status,paymentMethod:(PAYMENT_CODES as readonly unknown[]).includes(o.paymentMethod)?o.paymentMethod as Extraction['paymentMethod']:null,
   paymentReference:text(o.paymentReference,60,false),isCardPayment:flag(o.isCardPayment),isOwnTransfer:flag(o.isOwnTransfer),
   statementPeriod:text(o.statementPeriod,60),closingDate:date(o.closingDate,'cierre'),statementTotals:totals,lines,
-  invoiceReference:text(o.invoiceReference,60,false),concept:text(o.concept,200),warnings:[...warnings,...notes(o.warnings)].slice(0,20),missingFields:notes(o.missingFields),
+  invoiceReference:text(o.invoiceReference,60,false),concept:text(o.concept,200),category:category(o.category),warnings:[...warnings,...notes(o.warnings)].slice(0,20),missingFields:notes(o.missingFields),
  };
 }
 
@@ -97,7 +97,8 @@ payment_receipt = comprobante de un pago o transferencia ya hecho; card_statemen
 paymentStatus es "paid" SOLO si el documento dice explícitamente que fue pagado, aprobado o acreditado; una factura con vencimiento futuro es "unpaid".
 Conceptos (items): cada uno con el importe total de su línea. Descuentos, impuestos y recargos van en sus propias listas con importes positivos. taxesIncluded=true si el total ya incluye impuestos.
 Resumen de tarjeta: cada consumo en lines con su kind (purchase, refund, interest, fee, tax, adjustment, payment, other); las devoluciones y pagos con importe negativo; cuotas en installmentCurrent/installmentTotal; el total del resumen en statementTotals por moneda. El pago del resumen anterior es kind=payment.
-category: elegí SOLO entre las categorías recibidas; si ninguna es clara, null.
+category (en cada ítem y también para el documento entero): elegí SOLO entre las categorías recibidas, la más cercana al rubro del producto o del comercio (un suéter o una remera → ropa; bananas, leche o un supermercado → supermercado o alimentos; una farmacia → salud). Usá null solo si ninguna se parece.
+isOwnTransfer=true SOLO si el comprobante muestra que origen y destino son cuentas de la misma persona; una transferencia a un comercio, a un negocio o a otra persona es un pago (isOwnTransfer=false). isCardPayment=true SOLO si es el pago de un resumen de tarjeta.
 Planilla de texto (filas con celdas separadas por " | ", la primera suele ser el encabezado): es una lista de movimientos. Devolvé documentType=card_statement con UNA línea en lines por fila de datos, sin omitir ni inventar filas; kind=purchase para un gasto, refund para un reintegro o devolución, payment para un pago del resumen. Un gasto con importe positivo es un consumo.`;
 const str={type:Type.STRING,nullable:true},num={type:Type.INTEGER,nullable:true},bool={type:Type.BOOLEAN,nullable:true};
 const money={type:Type.OBJECT,properties:{description:str,amount:str},required:['description','amount']};
@@ -108,8 +109,8 @@ const schema={type:Type.OBJECT,properties:{
  paymentStatus:{type:Type.STRING,enum:['paid','unpaid','unknown']},paymentMethod:{type:Type.STRING,nullable:true,enum:[...PAYMENT_CODES]},paymentReference:str,isCardPayment:bool,isOwnTransfer:bool,
  statementPeriod:str,closingDate:str,statementTotals:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{currency:str,total:str},required:['currency','total']}},
  lines:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{date:str,merchant:str,amount:str,currency:str,kind:{type:Type.STRING,enum:[...LINE_KINDS]},installmentCurrent:num,installmentTotal:num,category:str},required:['date','merchant','amount','currency','kind','installmentCurrent','installmentTotal','category']}},
- invoiceReference:str,concept:str,warnings:{type:Type.ARRAY,items:{type:Type.STRING}},missingFields:{type:Type.ARRAY,items:{type:Type.STRING}},
-},required:['documentType','merchant','documentDate','dueDate','currency','totalAmount','taxesIncluded','items','discounts','taxes','surcharges','paymentStatus','paymentMethod','paymentReference','isCardPayment','isOwnTransfer','statementPeriod','closingDate','statementTotals','lines','invoiceReference','concept','warnings','missingFields']};
+ invoiceReference:str,concept:str,category:str,warnings:{type:Type.ARRAY,items:{type:Type.STRING}},missingFields:{type:Type.ARRAY,items:{type:Type.STRING}},
+},required:['documentType','merchant','documentDate','dueDate','currency','totalAmount','taxesIncluded','items','discounts','taxes','surcharges','paymentStatus','paymentMethod','paymentReference','isCardPayment','isOwnTransfer','statementPeriod','closingDate','statementTotals','lines','invoiceReference','concept','category','warnings','missingFields']};
 // Precios opcionales por millón de tokens (GEMINI_INPUT_PRICE_PER_MTOK / GEMINI_OUTPUT_PRICE_PER_MTOK): sin ellos no se estima costo.
 const price=(name:string)=>{const v=Number(process.env[name]);return Number.isFinite(v)&&v>0?v:null;};
 export function geminiDocumentExtractor(generate?:DocGenerate):DocumentExtractor{
