@@ -5,7 +5,7 @@ const columns = [
   'e.id', 'e.family_id AS "familyId"', 'to_char(e.date, \'YYYY-MM-DD\') AS date',
   'e.amount::text AS amount', 'e.currency', 'e.merchant', 'e.description',
   'e.category_id AS "categoryId"', 'c.name AS "categoryName"', 'e.payment_method AS "paymentMethod"',
-  'e.card_id AS "cardId"', 'e.reported_by_member_id AS "reportedByMemberId"', 'e.scope', 'e.source',
+  'e.card_id AS "cardId"', 'e.reported_by_member_id AS "reportedByMemberId"', 'e.scope', 'e.source', 'e.document_id AS "documentId"', 'e.installments', 'e.refunded_amount::text AS "refundedAmount"',
   'e.created_at AS "createdAt"', 'e.updated_at AS "updatedAt"',
 ].join(', ');
 export async function transaction<T>(pool: Pool, work: (db: PoolClient) => Promise<T>): Promise<T> {
@@ -17,9 +17,18 @@ export async function transaction<T>(pool: Pool, work: (db: PoolClient) => Promi
 function dto(row: any): ApiExpense {
   return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
 }
+// Conceptos por categoría de los gastos que los tienen (ticket con varias categorías). Un gasto sin conceptos no trae la clave.
+async function withItems(db: Connection, familyId: string, expenses: ApiExpense[]): Promise<ApiExpense[]> {
+  if (!expenses.length) return expenses;
+  const rows = (await db.query('SELECT i.expense_id AS "expenseId",i.description,i.category_id AS "categoryId",c.name AS "categoryName",i.amount::text AS amount FROM appgastos.expense_items i JOIN appgastos.categories c ON c.family_id=i.family_id AND c.id=i.category_id WHERE i.family_id=$1 AND i.expense_id=ANY($2::uuid[]) ORDER BY i.expense_id,i.position', [familyId, expenses.map(e => e.id)])).rows;
+  if (!rows.length) return expenses;
+  const byExpense = new Map<string, any[]>();
+  for (const { expenseId, ...item } of rows) byExpense.set(expenseId, [...(byExpense.get(expenseId) || []), item]);
+  return expenses.map(e => byExpense.has(e.id) ? { ...e, items: byExpense.get(e.id)! } : e);
+}
 export async function findExpense(db: Connection, familyId: string, id: string): Promise<ApiExpense | null> {
   const result = await db.query('SELECT ' + columns + ' FROM appgastos.expenses e JOIN appgastos.categories c ON c.id=e.category_id WHERE e.family_id=$1 AND e.id=$2', [familyId,id]);
-  return result.rows[0] ? dto(result.rows[0]) : null;
+  return result.rows[0] ? (await withItems(db, familyId, [dto(result.rows[0])]))[0] : null;
 }
 // shortcut: sin paginación, paginar al pasar de ~5000 gastos
 // author: limita a lo que registró ese integrante (ver visibleAuthor); undefined = sin límite.
@@ -32,13 +41,15 @@ export async function listExpenses(db: Connection, familyId: string, query: Expe
     args.push(query.month + '-01');
     filters += ' AND e.date >= $' + args.length + '::date AND e.date < ($' + args.length + '::date + INTERVAL \'1 month\')';
   }
+  // Categoría: coincide si es la del gasto o la de alguno de sus conceptos.
+  if(query.categoryId){args.push(query.categoryId);filters+=' AND (e.category_id=$'+args.length+' OR EXISTS(SELECT 1 FROM appgastos.expense_items i WHERE i.expense_id=e.id AND i.category_id=$'+args.length+'))';}
   for(const [field,column] of [
-    ['currency','currency'],['categoryId','category_id'],['paymentMethod','payment_method'],
+    ['currency','currency'],['paymentMethod','payment_method'],
     ['cardId','card_id'],['reportedByMemberId','reported_by_member_id'],
   ] as const)if(query[field]){args.push(query[field]);filters+=' AND e.'+column+'=$'+args.length;}
   if(query.merchant){args.push(query.merchant);filters+=' AND strpos(lower(COALESCE(e.merchant,\'\')),lower($'+args.length+'))>0';}
   const result = await db.query('SELECT ' + columns + ' FROM appgastos.expenses e JOIN appgastos.categories c ON c.id=e.category_id WHERE e.family_id=$1' + filters + ' ORDER BY e.date DESC,e.created_at DESC,e.id',args);
-  return result.rows.map(dto);
+  return withItems(db, familyId, result.rows.map(dto));
 }
 function values(input: ExpenseWrite): unknown[] {
   return [input.date,input.amount,input.currency,input.merchant,input.description,input.categoryId,input.paymentMethod,input.cardId,input.reportedByMemberId,input.scope ?? null];

@@ -130,6 +130,31 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await waitFor(async()=>(await text()).includes('Compra web'),'No apareció en el historial.');
     assert.ok((await text()).includes('Ana'));
     // Perfil y vinculación: el código se genera en la web y se completa desde el "bot".
+    // Comprobante leído por WhatsApp (borrador sintético): se revisa y se confirma desde la web; recién ahí se registra.
+    // Una categoría que la pantalla ya conoce (la de "Compras" se creó antes de abrirla; "Otros" viene del seed).
+    const hogar=(await db.pool.query("SELECT id FROM appgastos.categories WHERE family_id=$1 AND name='Otros'",[INITIAL_FAMILY_ID])).rows[0].id as string;
+    const draft={kind:'purchase_receipt',scope:'personal',currency:'ARS',date:'2026-10-09',merchant:'Super Demo',description:'Compra en Super Demo',total:'1000.00',
+     items:[{id:1,description:'Leche',amount:'600.00',categoryId:category,excluded:false},{id:2,description:'Jabon',amount:'400.00',categoryId:null,excluded:false}],
+     components:{discounts:[],taxes:[],surcharges:[],taxesIncluded:false},paymentMethod:null,cardId:null,duplicates:[],linkExpenseId:null,noExpense:false,noExpenseReason:null,paymentReference:null,notes:[]};
+    await db.pool.query("INSERT INTO appgastos.documents(family_id,member_id,sender,short_code,media_id,media_mime,state,kind,draft,expires_at) VALUES($1,$2,'5491100000001','AB23','1','image/jpeg','needs_review','purchase_receipt',$3,now()+interval '1 day')",[INITIAL_FAMILY_ID,member,JSON.stringify(draft)]);
+    await click('Comprobantes');
+    const listButton='[aria-label="Lista de comprobantes"] button';
+    await waitFor(()=>evaluate('!!document.querySelector('+JSON.stringify(listButton)+')'),'No listó el comprobante.');
+    await evaluate('document.querySelector('+JSON.stringify(listButton)+').click()');
+    await waitFor(()=>evaluate('!!document.querySelector('+JSON.stringify('[aria-label="Categoría de Jabon"]')+')'),'No abrió el detalle.');
+    assert.ok((await text()).includes('Leerlo no lo registra'));
+    assert.equal((await db.pool.query("SELECT count(*)::int n FROM appgastos.expenses WHERE document_id IS NOT NULL")).rows[0].n,0,'abrirlo no registra nada');
+    await click('Confirmar y registrar');
+    await waitFor(async()=>(await text()).includes('Todavía falta'),'No pidió los datos que faltan.');
+    await field('[aria-label="Categoría de Jabon"]',hogar);
+    await field('[aria-label="Medio de pago del comprobante"]','cash');
+    // Cada corrección se guarda en el servidor: se espera a que esté en la base y a que el botón vuelva a estar disponible.
+    await waitFor(async()=>(await db.pool.query("SELECT draft->>'paymentMethod' AS p FROM appgastos.documents")).rows[0].p==='cash','No guardó el medio de pago.');
+    await waitFor(()=>evaluate('[...document.querySelectorAll("button")].some(b=>b.textContent.trim()==="Confirmar y registrar"&&!b.disabled)'),'El botón no volvió a estar disponible.');
+    await click('Confirmar y registrar');
+    await waitFor(async()=>(await text()).includes('Registrado'),'No registró el comprobante.');
+    const saved2=(await db.pool.query("SELECT e.amount::text a,e.reported_by_member_id r,(SELECT count(*)::int FROM appgastos.expense_items i WHERE i.expense_id=e.id) items FROM appgastos.expenses e WHERE e.document_id IS NOT NULL")).rows;
+    assert.deepEqual(saved2.map(r=>[r.a,r.r,r.items]),[['1000.00',member,2]]);
     await click('Mi perfil');
     await waitFor(async()=>(await text()).includes('ana@familia.test'),'No mostró el perfil.');
     await click('Vincular WhatsApp');
@@ -146,7 +171,7 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     assert.ok((await text()).includes('Control de Gastos del Hogar'));
     assert.equal(await evaluate('!!document.querySelector(\'[aria-label="Integrante del dashboard"]\')'),true);
     await field('[aria-label="Mes del dashboard"]','2026-10');
-    await waitFor(async()=>(await text()).includes('40.000'),'El administrador no ve el gasto de otro integrante.');
+    await waitFor(async()=>(await text()).includes('41.000'),'El administrador no ve el gasto de otro integrante.');
     await click('Presupuestos');
     await field('[aria-label="Mes del presupuesto"]','2026-10');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Presupuesto de Compras"]\')'),'No mostró las categorías del presupuesto.');

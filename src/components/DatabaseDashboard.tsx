@@ -83,7 +83,12 @@ export function DatabaseDashboard({onOpenAddExpense}:{onOpenAddExpense:()=>void}
  const sum=(list:typeof selected)=>sumAmounts(list.map(e=>({amount:Number(e.amount)})));
  const aggregate=(key:'categoryName'|'paymentMethod'|'cardId')=>{
   const groups=new Map<string,{amount:number}[]>();
-  (key==='cardId'?cardExpenses:selected).forEach(e=>{const name=e[key]||'Sin tarjeta especificada';const group=groups.get(name)||[];group.push({amount:Number(e.amount)});groups.set(name,group);});
+  // Por categoría se reparte cada gasto según sus conceptos (ticket con varias categorías); sin conceptos cuenta entero. Nunca las dos cosas.
+  const add=(name:string,amount:string)=>{const group=groups.get(name)||[];group.push({amount:Number(amount)});groups.set(name,group);};
+  (key==='cardId'?cardExpenses:selected).forEach(e=>{
+   if(key==='categoryName'&&e.items?.length)e.items.forEach(i=>add(i.categoryName,i.amount));
+   else add(e[key]||'Sin tarjeta especificada',e.amount);
+  });
   return [...groups].map(([name,values])=>({name,total:sumAmounts(values)})).sort((a,b)=>b.total-a.total);
  };
  const money=(n:number)=>formatCurrency(n,currency);

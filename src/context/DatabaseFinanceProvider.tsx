@@ -72,9 +72,9 @@ export function DatabaseFinanceProvider({children}:{children:ReactNode}) {
  // Adaptador de lectura para vistas anteriores; no escribe localStorage.
  const expenses:Expense[]=apiExpenses.map(e=>({
   id:e.id,date:e.date,amount:Number(e.amount),currency:e.currency,merchant:e.merchant||undefined,
-  description:e.description,category:e.categoryName,categoryId:e.categoryId,paymentMethod:PAYMENT_LABELS[e.paymentMethod],
+  description:e.description,category:e.items?.length?'Varias categorías':e.categoryName,categoryId:e.categoryId,categoryIds:e.items?.length?e.items.map(i=>i.categoryId):[e.categoryId],items:e.items,paymentMethod:PAYMENT_LABELS[e.paymentMethod],
   cardId:e.cardId||undefined,reportedByMemberId:e.reportedByMemberId||undefined,paidByMemberId:e.reportedByMemberId||'',
-  isShared:true,installmentTotal:1,installmentCurrent:1,source:e.source,scope:e.scope??null,createdAt:e.createdAt,
+  isShared:true,installmentTotal:e.installments??1,installmentCurrent:1,source:e.source,scope:e.scope??null,createdAt:e.createdAt,
  }));
  const members:FamilyMember[]=apiMembers.map(m=>({
   id:m.id,name:m.name,avatar:'●',role:'member',color:'#2563EB',phoneNumber:m.phoneNumber||undefined,monthlyBudget:0,

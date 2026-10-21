@@ -11,7 +11,7 @@ import {conversationTtlMinutes} from './config';
 import type {InboxRow} from './repository';
 import type {Interpreter} from './interpretation';
 export type Member=CatalogEntry&{phone_number:string|null;role?:'admin'|'member'};
-export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized'|'linked'|'link_failed'|'query'|'query_denied';
+export type Outcome='registered'|'incomplete'|'unauthorized'|'unsupported'|'interpretation_error'|'question'|'corrected'|'cancelled'|'pending_conflict'|'nothing_to_cancel'|'unrecognized'|'linked'|'link_failed'|'query'|'query_denied'|'document_received'|'document_rejected'|'document_ready'|'document_failed'|'document_command';
 export interface Catalog {familyCurrency:string;categories:CatalogEntry[];cards:CardEntry[];member:Member}
 // Lo que decide un mensaje (fuera de la transacción); se aplica dentro de ella.
 export type Decision=
@@ -19,6 +19,7 @@ export type Decision=
  |{kind:'interpretation_error';transient:boolean;lastError:string}
  |{kind:'rejected';errors:string[];editing:boolean}
  |{kind:'link';code:string}
+ |{kind:'document';memberId:string;media:import('../documents/service').IncomingMedia}
  |{kind:'cancel'}|{kind:'conflict'}|{kind:'unknown'}
  |{kind:'update';draft:ExpenseDraft;result:DraftValidation;corrected:boolean;notice:string};
 export const MAX_INTERPRETATION_ATTEMPTS=5;

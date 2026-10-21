@@ -32,6 +32,8 @@ export async function answerQuery(pool:Pool,family:string,actor:Actor,intent:Que
  const own=actor.memberId??'00000000-0000-0000-0000-000000000000';
  const base=`FROM appgastos.expenses e JOIN appgastos.categories c ON c.family_id=e.family_id AND c.id=e.category_id
   WHERE e.family_id=$1 AND e.currency=$2 AND e.date>=$3::date AND e.date<($3::date+interval '1 month')`;
+ const lines=`FROM appgastos.expense_lines l JOIN appgastos.categories c ON c.family_id=l.family_id AND c.id=l.category_id
+  WHERE l.family_id=$1 AND l.currency=$2 AND l.date>=$3::date AND l.date<($3::date+interval '1 month')`;
  const reply=(text:string)=>({outcome:'query' as const,reply:text});
  const categories=(await pool.query('SELECT id,name FROM appgastos.categories WHERE family_id=$1',[family])).rows as {id:string;name:string}[];
  const findCategory=(raw:string)=>{
@@ -44,7 +46,8 @@ export async function answerQuery(pool:Pool,family:string,actor:Actor,intent:Que
   case 'my_total':
    return reply(mine.n?`Este mes registraste ${money(mine.total)} en ${mine.n} ${mine.n===1?'gasto':'gastos'}: ${money(mine.personal)} personales y ${money(mine.household)} de la casa.`:'Este mes todavía no registraste gastos.');
   case 'my_top_category':{
-   const rows=(await pool.query(`SELECT c.name,sum(e.amount)::text AS total ${base} AND e.reported_by_member_id=$4 GROUP BY c.name ORDER BY sum(e.amount) DESC,c.name LIMIT 3`,[family,familyCurrency,first,own])).rows;
+   // Por categoría se leen los conceptos (expense_lines): un ticket de varias categorías reparte su importe, sin contarlo dos veces.
+   const rows=(await pool.query(`SELECT c.name,sum(l.amount)::text AS total ${lines} AND l.reported_by_member_id=$4 GROUP BY c.name ORDER BY sum(l.amount) DESC,c.name LIMIT 3`,[family,familyCurrency,first,own])).rows;
    return reply(rows.length?'Tus categorías con más gasto este mes: '+rows.map((r,i)=>`${i+1}) ${r.name} ${money(r.total)}`).join(', ')+'.':'Este mes todavía no registraste gastos.');
   }
   case 'my_last':{
@@ -53,7 +56,7 @@ export async function answerQuery(pool:Pool,family:string,actor:Actor,intent:Que
   }
   case 'my_category':{
    const c=findCategory(intent.category);if(!c)return reply('No encontré esa categoría.');
-   const r=(await pool.query(`SELECT COALESCE(sum(e.amount),0)::text AS total ${base} AND e.reported_by_member_id=$4 AND e.category_id=$5`,[family,familyCurrency,first,own,c.id])).rows[0];
+   const r=(await pool.query(`SELECT COALESCE(sum(l.amount),0)::text AS total ${lines} AND l.reported_by_member_id=$4 AND l.category_id=$5`,[family,familyCurrency,first,own,c.id])).rows[0];
    return reply(`Este mes gastaste ${money(r.total)} en ${c.name}.`);
   }
   case 'family_total':{

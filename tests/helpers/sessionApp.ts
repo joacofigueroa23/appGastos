@@ -11,13 +11,16 @@ import {registerWhatsApp} from '../../src/backend/whatsapp/routes';
 import {registerDatabaseApi} from '../../src/backend/expenses/routes';
 import {registerBudgets} from '../../src/backend/budgets/routes';
 import {registerFixedExpenses} from '../../src/backend/fixed/routes';
+import {registerDocuments} from '../../src/backend/documents/routes';
+import type {DocumentDeps} from '../../src/backend/documents/service';
+import type {Extraction} from '../../src/backend/documents/types';
 import {enqueue} from '../../src/backend/whatsapp/repository';
 import {whatsappProcessor} from '../../src/backend/whatsapp/processor';
 import type {Interpretation} from '../../src/backend/whatsapp/candidate';
 export const ANON_KEY='anon-public-key';
 export {INITIAL_FAMILY_ID};
 const nothing:Interpretation={amount:null,amountText:null,dateText:null,currency:null,currencyText:null,merchant:null,description:null,category:null,paymentMethod:null,paymentMethodText:null,card:null};
-export async function sessionApp(){
+export async function sessionApp(opts:{documents?:DocumentDeps}={}){
  const db=await isolatedDatabase();await migrate(db.pool);await seed(db.pool);
  const q=(sql:string,args:unknown[]=[])=>db.pool.query(sql,args);
  const tokens:Record<string,string>={};
@@ -30,12 +33,12 @@ export async function sessionApp(){
  const supaUrl='http://127.0.0.1:'+(supa.address() as any).port;
  let interpretation:Interpretation=nothing;
  const replies:{to:string;text:string}[]=[];
- const processor=whatsappProcessor(db.pool,async()=>interpretation,async(to,text)=>{replies.push({to,text});});
+ const processor=whatsappProcessor(db.pool,async()=>interpretation,async(to,text)=>{replies.push({to,text});},opts.documents);
  const app=express();
  app.use(sessionAuth(db.pool,{url:supaUrl,anonKey:ANON_KEY}));
  registerWhatsApp(app,db.pool,{secret:'s',phoneNumberId:'1',startWorker:false,send:async()=>{}});
  app.use(express.json());registerAccounts(app,db.pool,{url:supaUrl,anonKey:ANON_KEY});
- registerBudgets(app,db.pool);registerFixedExpenses(app,db.pool);registerDatabaseApi(app,db.pool);
+ registerBudgets(app,db.pool);registerFixedExpenses(app,db.pool);registerDocuments(app,db.pool,opts.documents?.extract);registerDatabaseApi(app,db.pool);
  const server=createServer(app);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
  const base='http://127.0.0.1:'+(server.address() as any).port;
  const call=(path:string,token?:string,method='GET',body?:unknown)=>fetch(base+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});

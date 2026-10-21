@@ -12,14 +12,25 @@ import {MAX_INTERPRETATION_ATTEMPTS,decide,loadCatalog,type Catalog,type Decisio
 import {ConversationChanged,commit} from './commit';
 import {parseLinkCommand} from '../accounts/linking';
 import {answerQuery,parseQuery} from './queries';
-export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender){
+import {documentCommand,documentProcessor,expireDocuments,type DocumentDeps} from '../documents/service';
+import {parseCommand} from '../documents/commands';
+export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender,documents?:DocumentDeps){
+ const documentWorker=documents?documentProcessor(pool,documents):null;
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
   try{
    // Hora real del mensaje: Meta si está, si no la recepción. Define fecha de referencia y vencimiento.
    const at=row.meta_timestamp??row.received_at;
    let decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
-   if(row.message_type!=='text')decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
+   if(row.message_type==='image'||row.message_type==='document'){
+    // Comprobante: se identifica al remitente igual que con un texto. El archivo se lee después; acá solo se acepta o se rechaza.
+    const members=(await memberPhones(pool,row.family_id)) as Member[];
+    const matches=members.filter(m=>m.active&&normalizePhone(m.phone_number)===row.sender);
+    if(matches.length!==1)decision={kind:'reply',outcome:'unauthorized',reply:REPLIES.unauthorized,failMembers:members.filter(m=>normalizePhone(m.phone_number)===row.sender).map(m=>m.id)};
+    else if(!row.media)decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
+    else decision={kind:'document',memberId:matches[0].id,media:row.media};
+   }
+   else if(row.message_type!=='text')decision={kind:'reply',outcome:'unsupported',reply:REPLIES.unsupported};
    else if(parseLinkCommand(row.text_body)!==null)decision={kind:'link',code:parseLinkCommand(row.text_body)!};
    else{
     const members=(await memberPhones(pool,row.family_id)) as Member[];
@@ -36,7 +47,12 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
      // Consulta financiera ("¿cuánto gasté?"): se responde por reglas y SQL con los permisos del rol; no pasa por Gemini y
      // no toca la conversación pendiente.
      const query=parseQuery(row.text_body);
-     if(query){const a=await answerQuery(pool,row.family_id,{role:matches[0].role==='admin'?'admin':'member',memberId:matches[0].id},query,at,catalog.familyCurrency);decision={kind:'reply',outcome:a.outcome,reply:a.reply};}
+     // Confirmar, cancelar o corregir un comprobante abierto. Su efecto es idempotente (confirmar dos veces no registra dos veces),
+     // así que reprocesar este mensaje tras un corte no duplica nada.
+     const docReply=!query&&parseCommand(row.text_body!)!==null
+      ?await transaction(pool,db=>documentCommand(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation)):null;
+     if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};
+     else if(query){const a=await answerQuery(pool,row.family_id,{role:matches[0].role==='admin'?'admin':'member',memberId:matches[0].id},query,at,catalog.familyCurrency);decision={kind:'reply',outcome:a.outcome,reply:a.reply};}
      else decision=await decide(pool,interpret,row,at,catalog,conversation);
     }
    }
@@ -72,6 +88,15 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
   try{for(let n=0;n<20&&!stopped;n++){const processed=await processNext(),replied=await replyNext();if(!processed&&!replied)break;}}
   catch{console.warn('whatsapp: worker_unavailable');}
   finally{running=false;}
+  void drainDocuments();
  }
- return {processNext,replyNext,drain,start(){const timer=setInterval(()=>void drain(),2000);timer.unref();void drain();return ()=>{stopped=true;clearInterval(timer);};}};
+ // Leer un comprobante (descarga + modelo) puede tardar hasta un minuto: va en su propio ciclo para no demorar los mensajes de texto.
+ let reading=false;
+ async function drainDocuments(){
+  if(reading||stopped||!documentWorker)return;reading=true;
+  try{await expireDocuments(pool);for(let n=0;n<5&&!stopped;n++)if(!await documentWorker.processNext())break;}
+  catch{console.warn('documents: worker_unavailable');}
+  finally{reading=false;}
+ }
+ return {processNext,replyNext,processDocument:async()=>documentWorker?documentWorker.processNext():false,drain,drainDocuments,start(){const timer=setInterval(()=>{void drain();void drainDocuments();},2000);timer.unref();void drain();return ()=>{stopped=true;clearInterval(timer);};}};
 }

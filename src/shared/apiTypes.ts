@@ -19,7 +19,10 @@ export interface ExpenseWrite {
   description: string; categoryId: string; paymentMethod: PaymentCode;
   cardId: string | null; reportedByMemberId: string | null;
 }
+// Concepto de un gasto con varias categorías (ticket). La suma de los conceptos es el importe del gasto.
+export interface ApiExpenseItem { description: string; categoryId: string; categoryName: string; amount: string }
 export interface ApiExpense extends ExpenseWrite {
+  items?: ApiExpenseItem[]; documentId?: string | null; installments?: number | null; refundedAmount?: string;
   id: string; familyId: string; categoryName: string; source: 'manual' | 'whatsapp';
   createdAt: string; updatedAt: string;
 }

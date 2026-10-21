@@ -3,14 +3,17 @@ import express,{type Express} from 'express';
 import type {Pool} from 'pg';
 import {resolveFamilyId} from '../expenses/service';
 import {normalizePhone,validSignature} from './security';
-import {enqueue,type IncomingMessage} from './repository';
+import {enqueue,type IncomingMessage,type MessageMedia} from './repository';
 import {geminiInterpreter,type Interpreter} from './interpretation';
 import {metaSender,metaTokenStatus,type ReplySender} from './transport';
 import {whatsappProcessor} from './processor';
+import {metaMediaFetcher} from '../documents/media';
+import {geminiDocumentExtractor} from '../documents/extraction';
+import type {DocumentDeps} from '../documents/service';
 import {actorOf} from '../accounts/policy';
-export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean}
+export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean;documents?:DocumentDeps}
 export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOptions={}){
- const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender()):null;
+ const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender(),options.documents||{fetchMedia:metaMediaFetcher(),extract:geminiDocumentExtractor()}):null;
  const configured=!!((options.secret??process.env.WHATSAPP_APP_SECRET)&&(options.phoneNumberId??process.env.WHATSAPP_PHONE_NUMBER_ID));
  const stop=options.startWorker===false||!configured?()=>{}:processor?.start()||(()=>{});
  // Aviso temprano: un token temporal de Meta vence a las 24 h y las respuestas dejan de salir.
@@ -50,7 +53,14 @@ export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOpti
       if(m.type==='text'&&(typeof m.text?.body!=='string'||!m.text.body.trim()||m.text.body.length>4096))throw new Error();
       // timestamp de Meta: segundos Unix como string. Inválido o ausente → se ordena por recepción.
       const metaTimestamp=typeof m.timestamp==='string'&&/^\d{1,12}$/.test(m.timestamp)?new Date(Number(m.timestamp)*1000):null;
-      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date(),metaTimestamp});
+      // Imagen o documento: solo se guardan los datos que declara Meta. El archivo se pide después por su id (nunca por una URL del mensaje).
+      let media:MessageMedia|null=null;
+      if(m.type==='image'||m.type==='document'){
+       const item=m[m.type],str=(v:unknown,max:number)=>typeof v==='string'&&v.length<=max?v:null;
+       if(!item||typeof item.id!=='string'||!item.id||item.id.length>256)throw new Error();
+       media={id:item.id,mime:str(item.mime_type,100)||'',sha256:str(item.sha256,128),filename:str(item.filename,255),caption:str(item.caption,1024)};
+      }
+      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date(),metaTimestamp,media});
       if(messages.length>100)throw new Error();
      }
     }

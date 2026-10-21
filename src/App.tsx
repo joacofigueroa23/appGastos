@@ -15,6 +15,7 @@ import { AddExpenseModal } from './components/AddExpenseModal';
 import { ProfileView } from './components/ProfileView';
 import { BudgetsView } from './components/BudgetsView';
 import { FixedExpensesView } from './components/FixedExpensesView';
+import { DocumentsView } from './components/DocumentsView';
 import { AuthGate, useRole } from './context/AuthContext';
 
 export function AppContent() {
@@ -46,6 +47,8 @@ export function AppContent() {
         {currentTab==='family'&&!isDemoMode&&admin&&<FamilyManagementView/>}
 
         {currentTab==='profile'&&<ProfileView/>}
+
+        {currentTab==='documents'&&!isDemoMode&&<DocumentsView/>}
 
         {currentTab==='budgets'&&!isDemoMode&&admin&&<BudgetsView/>}
 

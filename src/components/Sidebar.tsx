@@ -1,7 +1,7 @@
 import React from 'react';
 import { useFinance } from '../context/FinanceContext';
 import { useAuth, useRole } from '../context/AuthContext';
-import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users, UserRound, LogOut, PiggyBank, CalendarClock } from 'lucide-react';
+import { Wallet, LayoutDashboard, Calendar, Receipt, BarChart3, Users, UserRound, LogOut, PiggyBank, CalendarClock, FileText } from 'lucide-react';
 
 interface SidebarProps {
   currentTab: string;
@@ -26,6 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
   ] : [
     { id: 'dashboard', label: 'Panel Central', icon: LayoutDashboard },
     { id: 'expenses', label: 'Historial de Gastos', icon: Receipt },
+    { id: 'documents', label: 'Comprobantes', icon: FileText },
     ...(admin ? [{ id: 'budgets', label: 'Presupuestos', icon: PiggyBank }, { id: 'fixed', label: 'Gastos fijos', icon: CalendarClock }] : []),
     ...(admin ? [{ id: 'family', label: 'Tarjetas e integrantes', icon: Users }] : []),
     ...(session ? [{ id: 'profile', label: 'Mi perfil', icon: UserRound }] : []),
