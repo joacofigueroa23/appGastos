@@ -17,6 +17,8 @@ export interface ReceiptDraft {
  total:string|null;items:DraftItem[];components:{discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];taxesIncluded:boolean};
  paymentMethod:PaymentCode|null;cardId:string|null;duplicates:DuplicateRef[];linkExpenseId:string|null;noExpense:boolean;noExpenseReason:string|null;
  paymentReference:string|null;notes:string[];
+ // Obligación fija pendiente que este comprobante parece saldar (solo se calcula para administradores). Al confirmar se registra UN gasto y se vincula.
+ settle?:{occurrenceId:string;label:string;categoryId:string}|null;
 }
 export interface InvoiceDraft {
  kind:'pending_invoice';issuer:string|null;concept:string|null;period:string|null;amount:string|null;currency:string;issueDate:string|null;dueDate:string|null;reference:string|null;notes:string[];

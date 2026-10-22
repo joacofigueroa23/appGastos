@@ -3,6 +3,7 @@ import {financeApi} from '../services/financeApi';
 import {useFinance} from '../context/FinanceContext';
 import {useRole} from '../context/AuthContext';
 import {PAYMENT_CODES,PAYMENT_LABELS} from '../shared/apiTypes';
+import {categoryLabel,sortedCategories} from '../utils/categories';
 import type {DocumentDto,DocumentKind,DocumentState,DraftLine,ReceiptDraft,StatementDraft,InvoiceDraft} from '../shared/documentTypes';
 const KIND:Record<string,string>={purchase_receipt:'Ticket de compra',pending_invoice:'Factura pendiente',payment_receipt:'Comprobante de pago',card_statement:'Resumen de tarjeta',unknown:'Sin clasificar'};
 const STATE:Record<DocumentState,[string,string]>={received:['Leyendo','bg-slate-100 text-slate-700'],processing:['Leyendo','bg-slate-100 text-slate-700'],needs_review:['Para revisar','bg-amber-100 text-amber-800'],confirmed:['Registrado','bg-green-100 text-green-800'],cancelled:['Descartado','bg-slate-100 text-slate-500'],failed:['No se pudo leer','bg-red-100 text-red-800']};
@@ -45,7 +46,7 @@ export function DocumentsView(){
  const input='h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm',card='bg-white p-4 sm:p-6 rounded-3xl space-y-4';
  const catSelect=(value:string|null,onChange:(id:string|null)=>void,label:string,disabled=false)=>
   <select aria-label={label} disabled={disabled||busy} value={value||''} onChange={e=>onChange(e.target.value||null)} className={input+' max-w-44'}>
-   <option value="">(sin categoría)</option>{categories.filter(c=>c.active||c.id===value).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+   <option value="">(sin categoría)</option>{sortedCategories(categories.filter(c=>c.active||c.id===value)).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}</option>)}
   </select>;
  const notes=(n:string[])=>n.length>0&&<ul className="text-xs text-amber-800 space-y-0.5">{n.map(x=><li key={x}>⚠️ {x}</li>)}</ul>;
 
@@ -74,11 +75,16 @@ export function DocumentsView(){
     <span>{money(x.amount,x.currency)} · {dmy(x.date)}{x.label?' · '+x.label:''}{x.author?' · cargó '+x.author:''}</span></label>)}
    <label className="flex items-center gap-2"><input type="radio" name="dup" checked={!d.linkExpenseId} onChange={()=>void edit([{type:'link',expenseId:null}])}/><span>No, es un gasto nuevo</span></label>
   </div>}
+  {d.settle&&!d.noExpense&&!d.linkExpenseId&&<div className="rounded-2xl bg-blue-50 p-3 space-y-2 text-sm">
+   <p className="font-medium">Corresponde al gasto fijo «{d.settle.label}».</p>
+   <p className="text-xs text-slate-600">Al confirmar se registra UN gasto de la casa y la obligación queda pagada. Un pago de gasto fijo no descuenta de los presupuestos variables.</p>
+   <button disabled={busy} className="text-xs text-blue-700" onClick={()=>void edit([{type:'settle',occurrenceId:null}])}>No es ese gasto fijo</button>
+  </div>}
   {d.kind==='payment_receipt'&&<label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={d.noExpense} disabled={busy} onChange={e=>void edit([{type:'noExpense',value:e.target.checked}])}/>No es un gasto (transferencia entre mis cuentas o pago de tarjeta)</label>}
   {d.noExpense&&d.noExpenseReason&&<p className="text-xs text-slate-600">{d.noExpenseReason}</p>}
   {notes(d.notes)}
   <div className="flex flex-wrap gap-3 pt-1">
-   <button disabled={busy} onClick={()=>void confirm()} className="h-10 px-4 rounded-xl bg-accent text-white text-sm font-semibold disabled:opacity-60">{d.noExpense?'Confirmar sin registrar gasto':d.linkExpenseId?'Asociar al gasto existente':'Confirmar y registrar'}</button>
+   <button disabled={busy} onClick={()=>void confirm()} className="h-10 px-4 rounded-xl bg-accent text-white text-sm font-semibold disabled:opacity-60">{d.noExpense?'Confirmar sin registrar gasto':d.linkExpenseId?'Asociar al gasto existente':d.settle?'Confirmar y marcar como pagada':'Confirmar y registrar'}</button>
    <button disabled={busy} onClick={()=>void cancel()} className="h-10 px-4 rounded-xl bg-slate-100 text-sm font-semibold">Descartar</button>
   </div>
  </div>;
@@ -125,7 +131,7 @@ export function DocumentsView(){
    <label className="text-xs text-slate-500">Gasto fijo<select aria-label="Gasto fijo de la factura" value={occurrence} disabled={busy} onChange={e=>setOccurrence(e.target.value)} className={input+' block'}><option value="">Elegir…</option>{(doc?.occurrences||[]).map(o=><option key={o.id} value={o.id}>{o.name} · {o.month} · vence {dmy(o.dueDate)}</option>)}</select></label>
    <button disabled={busy||!occurrence} onClick={()=>void confirm({occurrenceId:occurrence})} className="h-9 px-4 rounded-xl bg-accent text-white text-sm font-semibold disabled:opacity-40">Asociar</button></div>}
   {admin&&d.amount&&d.dueDate&&<div className="flex flex-wrap items-end gap-3">
-   <label className="text-xs text-slate-500">Si no existe, crear la obligación en la categoría<select aria-label="Categoría de la obligación nueva" value={newFixedCategory} disabled={busy} onChange={e=>setNewFixedCategory(e.target.value)} className={input+' block'}><option value="">Elegir…</option>{categories.filter(c=>c.active).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+   <label className="text-xs text-slate-500">Si no existe, crear la obligación en la categoría<select aria-label="Categoría de la obligación nueva" value={newFixedCategory} disabled={busy} onChange={e=>setNewFixedCategory(e.target.value)} className={input+' block'}><option value="">Elegir…</option>{sortedCategories(categories.filter(c=>c.active)).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}</option>)}</select></label>
    <button disabled={busy||!newFixedCategory} onClick={()=>void confirm({newFixedCategoryId:newFixedCategory})} className="h-9 px-4 rounded-xl bg-accent text-white text-sm font-semibold disabled:opacity-40">Crear obligación pendiente</button></div>}
   {(admin||mine)&&<button disabled={busy} onClick={()=>void cancel()} className="h-9 px-4 rounded-xl bg-slate-100 text-sm font-semibold">Descartar</button>}
  </div>;

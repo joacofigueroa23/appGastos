@@ -1,4 +1,5 @@
 import React,{useState} from 'react';
+import {categoryLabel,sortedCategories} from '../utils/categories';
 import {useFinance} from '../context/FinanceContext';
 import {useAuth} from '../context/AuthContext';
 import {PAYMENT_CODES,PAYMENT_LABELS,type ApiExpense,type ExpenseWrite} from '../shared/apiTypes';
@@ -56,7 +57,7 @@ export function ManualExpenseForm({onClose,expense}:{onClose:()=>void;expense?:A
     <label className="block">Comercio<input aria-label="Comercio" className={cls} maxLength={200} value={form.merchant||''} onChange={e=>patch('merchant',e.target.value||null)}/></label>
     <label className="block">Categoría *<select aria-label="Categoría" disabled={locked} className={cls} required value={form.categoryId} onChange={e=>patch('categoryId',e.target.value)}>
      <option value="">Selecciona una categoría</option>
-     {categories.filter(c=>c.active||c.id===expense?.categoryId).map(c=><option key={c.id} value={c.id}>{c.name}{c.active?'':' (inactiva)'}</option>)}
+     {sortedCategories(categories.filter(c=>c.active||c.id===expense?.categoryId)).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}{c.active?'':' (inactiva)'}</option>)}
     </select></label>
     <label className="block">Medio de pago *<select aria-label="Medio de pago" className={cls} required value={form.paymentMethod} onChange={e=>setForm(p=>({...p,paymentMethod:e.target.value as ExpenseWrite['paymentMethod'],cardId:null}))}>
      <option value="">Selecciona un medio de pago</option>{PAYMENT_CODES.map(c=><option key={c} value={c}>{PAYMENT_LABELS[c]}</option>)}

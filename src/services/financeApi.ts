@@ -1,5 +1,5 @@
 import type { DocumentDto } from '../shared/documentTypes';
-import type { FixedExpense, FixedOccurrence, UnlinkedPayment, BudgetReport, ApiCard, ApiCategory, ApiExpense, ApiMember, AuthMember, Role, ExpenseWrite, CardWrite, MemberWrite, ExpenseFilters } from '../shared/apiTypes';
+import type { ControlSummary, FixedExpense, FixedOccurrence, UnlinkedPayment, BudgetReport, ApiCard, ApiCategory, ApiExpense, ApiMember, AuthMember, Role, ExpenseWrite, CardWrite, MemberWrite, ExpenseFilters } from '../shared/apiTypes';
 export class ApiRequestError extends Error { constructor(public status: number, message: string) { super(message); } }
 // Con sesión individual (Supabase) cada pedido lleva el token; sin ella el navegador usa Basic Auth por su cuenta.
 let tokenProvider: (() => Promise<string | null>) | null = null, onUnauthorized: (() => void) | null = null;
@@ -20,6 +20,11 @@ export const financeApi = {
   budgets: (month:string) => request<BudgetReport>('/api/budgets?month='+month),
   setBudget: (month:string,categoryId:string,amount:string) => request<void>('/api/budgets/'+month+'/'+categoryId,'PUT',{amount}),
   removeBudget: (month:string,categoryId:string) => request<void>('/api/budgets/'+month+'/'+categoryId,'DELETE'),
+  setBudgetBase: (categoryId:string,amount:string,from?:string) => request<void>('/api/budgets/base/'+categoryId,'PUT',{amount,...(from?{from}:{})}),
+  endBudgetBase: (categoryId:string,from?:string) => request<void>('/api/budgets/base/'+categoryId+(from?'?from='+from:''),'DELETE'),
+  controlSummary: (month:string) => request<ControlSummary>('/api/control/summary?month='+month),
+  createCategory: (input:{name:string;parentId?:string|null}) => request<{category:ApiCategory}>('/api/categories','POST',input),
+  updateCategory: (id:string,input:{name?:string;parentId?:string|null;active?:boolean}) => request<{category:ApiCategory}>('/api/categories/'+id,'PATCH',input),
   copyBudgets: (from:string,to:string) => request<{copied:number}>('/api/budgets/copy','POST',{from,to}),
   fixedExpenses: () => request<{fixedExpenses:FixedExpense[]}>('/api/fixed-expenses'),
   createFixedExpense: (input:Record<string,unknown>) => request<{fixedExpense:FixedExpense}>('/api/fixed-expenses','POST',input),

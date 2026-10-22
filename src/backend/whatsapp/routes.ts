@@ -5,15 +5,16 @@ import {resolveFamilyId} from '../expenses/service';
 import {normalizePhone,validSignature} from './security';
 import {enqueue,type IncomingMessage,type MessageMedia} from './repository';
 import {geminiInterpreter,type Interpreter} from './interpretation';
+import type {AdminInterpreter} from './adminIntent';
 import {metaSender,metaTokenStatus,type ReplySender} from './transport';
 import {whatsappProcessor} from './processor';
 import {metaMediaFetcher} from '../documents/media';
 import {geminiDocumentExtractor} from '../documents/extraction';
 import type {DocumentDeps} from '../documents/service';
 import {actorOf} from '../accounts/policy';
-export interface WhatsAppOptions {secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean;documents?:DocumentDeps}
+export interface WhatsAppOptions {adminInterpret?:AdminInterpreter;secret?:string;verifyToken?:string;phoneNumberId?:string;familyId?:string;interpret?:Interpreter;send?:ReplySender;startWorker?:boolean;documents?:DocumentDeps}
 export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOptions={}){
- const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender(),options.documents||{fetchMedia:metaMediaFetcher(),extract:geminiDocumentExtractor()}):null;
+ const processor=pool?whatsappProcessor(pool,options.interpret||geminiInterpreter(),options.send||metaSender(),options.documents||{fetchMedia:metaMediaFetcher(),extract:geminiDocumentExtractor()},options.adminInterpret):null;
  const configured=!!((options.secret??process.env.WHATSAPP_APP_SECRET)&&(options.phoneNumberId??process.env.WHATSAPP_PHONE_NUMBER_ID));
  const stop=options.startWorker===false||!configured?()=>{}:processor?.start()||(()=>{});
  // Aviso temprano: un token temporal de Meta vence a las 24 h y las respuestas dejan de salir.

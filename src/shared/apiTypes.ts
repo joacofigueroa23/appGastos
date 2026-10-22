@@ -4,7 +4,7 @@ export const PAYMENT_LABELS: Record<PaymentCode, import("../types").PaymentMetho
   cash: 'Efectivo', debit_card: 'Tarjeta de Débito', credit_card: 'Tarjeta de Crédito',
   transfer: 'Transferencia', wallet: 'Billetera Virtual', other: 'Otro',
 };
-export interface ApiCategory { id: string; familyId: string; name: string; active: boolean; createdAt: string }
+export interface ApiCategory { id: string; familyId: string; name: string; active: boolean; createdAt: string; parentId?: string | null }
 export const CARD_TYPES = ['credit_card','debit_card'] as const;
 export type CardType = (typeof CARD_TYPES)[number];
 export interface ApiCard extends ApiCategory { cardType: CardType | null }
@@ -36,16 +36,26 @@ export interface ExpenseFilters {
  cardId?:string;reportedByMemberId?:string;merchant?:string;scope?:ExpenseScope|'none';
 }
 
-export interface BudgetLine {categoryId:string;categoryName:string;amount:string;spent:string;available:string;percent:number;exceeded:boolean}
+// parentId: categoría principal si es una subcategoría. source: de dónde sale el límite del mes (base recurrente o excepción de ese mes); baseAmount: la base vigente.
+export interface BudgetLine {categoryId:string;categoryName:string;amount:string;spent:string;available:string;percent:number;exceeded:boolean;parentId?:string|null;source?:'base'|'exception';baseAmount?:string|null}
 export interface BudgetReport {
  month:string;currency:string;budgets:BudgetLine[];
  // Categorías con gasto en el mes y sin presupuesto asignado: se informan aparte, nunca se ocultan.
  unbudgeted:{categoryId:string;categoryName:string;spent:string}[];
- // budgeted = suma de los presupuestos por categoría. spent y available se miden solo sobre categorías presupuestadas;
- // totalSpent es todo el gasto del mes (incluye lo no presupuestado).
+ // budgeted = presupuesto total SIN doble contabilización (principales + subcategorías cuyo padre no tiene presupuesto). spent y available se miden
+ // sobre lo presupuestado; totalSpent es todo el gasto VARIABLE del mes (los pagos de gastos fijos no cuentan acá).
  totals:{budgeted:string;spent:string;available:string;percent:number;unbudgetedSpent:string;totalSpent:string;exceededCount:number};
 }
 
+// Totales de control financiero (solo administradores): gastos fijos y presupuestos variables por separado.
+// totalSpent = fijos pagados + variables registrados; los pendientes y las deudas anteriores NO son gasto.
+export interface ControlAmount { amount: string; count: number }
+export interface ControlSummary {
+  month: string; currency: string;
+  fixed: { paid: ControlAmount; paidLate: ControlAmount; pending: ControlAmount; overdue: ControlAmount; previousDebts: ControlAmount };
+  variable: { budgeted: string; spent: string; available: string; percent: number; unbudgetedSpent: string; registered: string };
+  totalSpent: string;
+}
 // Gastos fijos (solo administradores). status 'overdue' = sin pagar y vencida; se calcula, no se guarda.
 export interface FixedExpense { id: string; name: string; categoryId: string; categoryName: string; expectedAmount: string; currency: string; frequency: 'monthly'; startDate: string; dueDay: number; endDate: string | null; installmentsTotal: number | null; active: boolean }
 export interface FixedOccurrence { id: string; fixedExpenseId: string; name: string; categoryName: string; month: string; dueDate: string; expectedAmount: string; installmentNumber: number | null; installmentsTotal: number | null; expenseId: string | null; linkSource: 'auto' | 'manual' | null; paidAmount: string | null; paidDate: string | null; status: 'pending' | 'paid' | 'overdue' }

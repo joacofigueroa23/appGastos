@@ -89,6 +89,6 @@ test('Presupuestos mensuales: permisos, unicidad, consumo y copia entre meses',a
  });
  await t.test('un mes sin presupuesto devuelve ceros y deja ver los gastos como no presupuestados',async()=>{
   const r=await report('2027-03');
-  assert.deepEqual(r.budgets,[]);assert.equal(r.totals.budgeted,'0');assert.equal(r.totals.percent,0);
+  assert.deepEqual(r.budgets,[]);assert.equal(r.totals.budgeted,'0.00');assert.equal(r.totals.percent,0);
  });
 });

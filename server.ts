@@ -12,6 +12,8 @@ import { sessionAuth, supabaseFromEnv } from './src/backend/accounts/session';
 import { registerAccounts } from './src/backend/accounts/routes';
 import { registerBudgets } from './src/backend/budgets/routes';
 import { registerFixedExpenses } from './src/backend/fixed/routes';
+import { registerControl } from './src/backend/finance/routes';
+import { registerCategories } from './src/backend/categories/routes';
 import { registerDocuments } from './src/backend/documents/routes';
 
 dotenv.config();
@@ -47,6 +49,8 @@ if (demoEnabled) (await import('./src/backend/demoRoutes')).registerDemoRoutes(a
 registerAccounts(app, databasePool, supabase);
 registerBudgets(app, databasePool);
 registerFixedExpenses(app, databasePool);
+registerCategories(app, databasePool);
+registerControl(app, databasePool);
 registerDocuments(app, databasePool);
 registerDatabaseApi(app, databasePool);
 

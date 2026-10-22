@@ -12,7 +12,7 @@ import {declaredMime,DocumentError,failureReply,REJECTED_TYPE_REPLY,validateMedi
 import type {MediaFetcher} from './media';
 import type {DocumentExtractor} from './extraction';
 import {applyEdit,BLOCKED,canAutoRegister,buildInvoiceDraft,buildReceiptDraft,buildStatementDraft,classify,receiptProblems,type DraftContext,type Edit} from './draft';
-import {withReceiptDuplicates,withStatementDuplicates} from './duplicates';
+import {withFixedMatch,withReceiptDuplicates,withStatementDuplicates} from './duplicates';
 import {fromCents,includedItems,primaryCategory,toCents} from './reconcile';
 import {COMMAND_HELP,invoiceSummary,receiptSummary,statementSummary,unknownSummary} from './summary';
 import {findCategory,findItem,parseAmountText,parseCommand,parseDateText} from './commands';
@@ -129,7 +129,9 @@ export function documentProcessor(pool:Pool,deps:DocumentDeps){
 export async function buildFor(db:Connection,doc:Pick<DocRow,'family_id'|'member_id'|'short_code'|'household_hint'>,e:Extraction,ctx:DraftContext,viewer:Viewer){
  const kind=classify(e),dup={author:viewer.role==='member'?viewer.memberId??undefined:undefined,admin:viewer.role==='admin'};
  if(kind==='purchase_receipt'||kind==='payment_receipt'){
-  const draft=await withReceiptDuplicates(db,doc.family_id,dup,buildReceiptDraft(e,ctx,kind,doc.household_hint));
+  let draft=await withReceiptDuplicates(db,doc.family_id,dup,buildReceiptDraft(e,ctx,kind,doc.household_hint));
+  // Solo el administrador ve y puede saldar obligaciones fijas.
+  if(viewer.role==='admin'&&kind==='payment_receipt')draft=await withFixedMatch(db,doc.family_id,draft);
   return {kind,draft:draft as Draft,reply:receiptSummary(draft,ctx,doc.short_code)};
  }
  if(kind==='pending_invoice'){const draft=buildInvoiceDraft(e,ctx);return {kind,draft:draft as Draft,reply:invoiceSummary(draft,viewer.role==='admin',ctx)};}
@@ -246,6 +248,15 @@ export async function confirmDocument(pool:Pool,db:Connection,doc:DocRow,viewer:
   return '✅ Importé '+ids.length+' consumos del resumen'+(refunds.length?' y apliqué '+refunds.length+' devolución(es) restando del gasto original':'')+'. Los que dejaste afuera no se registraron.';
  }
  // Ticket o comprobante de pago.
+ // Saldar una obligación fija: si ya estaba pagada no se crea otro gasto; si no, se registra UN gasto de la casa y se vincula (el pago no consume presupuesto variable).
+ let settleOccurrence:string|null=null;
+ if(draft.settle&&!draft.noExpense&&!draft.linkExpenseId){
+  if(viewer.role!=='admin')throw new DocumentActionError('Solo un administrador puede saldar una obligación fija.');
+  const o=(await db.query('SELECT id,expense_id FROM appgastos.fixed_expense_occurrences WHERE family_id=$1 AND id=$2 FOR UPDATE',[doc.family_id,draft.settle.occurrenceId])).rows[0];
+  if(!o)throw new DocumentActionError('Esa obligación ya no existe. Respondé *no es gasto fijo* para registrarlo como un gasto común.');
+  if(o.expense_id){await finish(db,doc,'confirmed',null,{noExpense:true,reason:'La obligación ya estaba pagada: no creé otro gasto.'});return '✅ «'+draft.settle.label+'» ya figuraba como pagado. No creé otro gasto.';}
+  settleOccurrence=o.id;
+ }
  if(draft.noExpense){await finish(db,doc,'confirmed',null,{noExpense:true,reason:draft.noExpenseReason});return '✅ Listo: no registré ningún gasto ('+(draft.noExpenseReason||'indicaste que no lo es')+').';}
  if(draft.linkExpenseId){
   const r=await db.query('UPDATE appgastos.expenses SET document_id=$2 WHERE family_id=$1 AND id=$3 AND document_id IS NULL'+(owner.role==='member'?' AND reported_by_member_id=$4':'')+' RETURNING id',
@@ -260,12 +271,17 @@ export async function confirmDocument(pool:Pool,db:Connection,doc:DocRow,viewer:
  const categoriesUsed=new Set(items.map(i=>i.categoryId));
  const expense=await svc.createExpense({
   date:draft.date,amount:draft.total,currency:draft.currency,merchant:draft.merchant,description:draft.description,
-  categoryId:categoriesUsed.size>1?primaryCategory(items):items[0].categoryId,paymentMethod:draft.paymentMethod,cardId:draft.cardId,scope:draft.scope,
+  categoryId:categoriesUsed.size>1?primaryCategory(items):items[0].categoryId,paymentMethod:draft.paymentMethod,cardId:draft.cardId,scope:settleOccurrence?'household':draft.scope,
  },SOURCE,db);
+ if(settleOccurrence){
+  await db.query('UPDATE appgastos.fixed_expense_occurrences SET expense_id=NULL,link_source=NULL WHERE expense_id=$1 AND id<>$2',[expense.id,settleOccurrence]);
+  await db.query("UPDATE appgastos.fixed_expense_occurrences SET expense_id=$2,link_source='manual' WHERE id=$1 AND (expense_id IS NULL OR expense_id=$2)",[settleOccurrence,expense.id]);
+ }
  // Con varias categorías el gasto guarda sus conceptos; la suma coincide con el total (lo exige también la base al cerrar la transacción).
  if(categoriesUsed.size>1)await attachItems(db,doc.family_id,expense.id,items);
  await db.query('UPDATE appgastos.expenses SET document_id=$2 WHERE id=$1',[expense.id,doc.id]);
- await finish(db,doc,'confirmed',null,{expenseId:expense.id,categories:categoriesUsed.size});
+ await finish(db,doc,'confirmed',null,{expenseId:expense.id,categories:categoriesUsed.size,settledOccurrenceId:settleOccurrence});
+ if(settleOccurrence)return '✅ Registré el pago de «'+draft.settle!.label+'» por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+'. La obligación quedó pagada y no descuenta de tus presupuestos.';
  const catName=(id:string|null)=>ctx.categories.find(c=>c.id===id)?.name;
  return '✅ Registrado: '+draft.description+' por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+(categoriesUsed.size>1?' repartido en '+categoriesUsed.size+' categorías':catName(items[0].categoryId)?' en '+catName(items[0].categoryId):'')+'.';
 }
@@ -377,6 +393,7 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
    case 'expense':edits=[{type:'noExpense',value:false}];break;
    case 'link':if(!d.duplicates.length)return say('No encontré un gasto parecido para asociar.');if(d.duplicates.length>1&&!d.linkExpenseId)return say('Hay varios gastos parecidos: asocialo desde la web (Comprobantes).');edits=[{type:'link',expenseId:d.linkExpenseId||d.duplicates[0].expenseId}];break;
    case 'unlink':edits=[{type:'link',expenseId:null}];break;
+   case 'unsettle':if(!d.settle)return say('Ese comprobante no está asociado a un gasto fijo.');edits=[{type:'settle',occurrenceId:null}];break;
    case 'date':{const v=parseDateText(cmd.raw,ctx.today);if(!v)return say('No entendí esa fecha. Probá con «fecha 10/10» o «fecha ayer».');edits=[{type:'date',value:v}];break;}
    case 'total':{const v=parseAmountText(cmd.raw);if(!v)return say('No entendí ese total. Probá con «total 19000».');edits=[{type:'total',value:v}];break;}
    case 'exclude':{const item=findItem(d,cmd.item);if(!item)return null;edits=[{type:'itemExcluded',itemId:item.id,excluded:true}];break;}
