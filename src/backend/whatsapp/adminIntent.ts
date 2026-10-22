@@ -35,14 +35,16 @@ export function parseAdminIntent(raw:unknown):AdminIntent{
 const CONFIG_WORDS=/\b(cre[ae]|crea|creame|agrega|agregame|agrega|a[nñ]ade|anade|pone|poneme|pon|cambia|cambiame|modifica|actualiza|desactiva|activa|reactiva|archiva|elimina|saca|sub[ie]|baja)\b/;
 const CONFIG_TOPIC=/\b(categoria|categorias|subcategoria|presupuesto|presupuestos|gasto fijo|gastos fijos|obligacion|cuesta|vence)\b/;
 const PAID=/\b(ya pague|pague el|pague la|pague los|pague las|ya se pago|ya esta pagado|ya esta pagada|pagamos el|pagamos la)\b/;
+// Una frase que ARRANCA con el tema («Presupuesto mascotas 250mil») también es configuración aunque no lleve verbo.
+const TOPIC_FIRST=/^(?:el |mi |un |nuevo )?(?:presupuesto|gasto fijo|subcategoria|categoria)\b/;
 export function looksLikeAdminRequest(text:string|null):boolean{
- const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ');
- return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||PAID.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
+ const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
+ return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||PAID.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
 }
 // Un integrante que pide cambiar la configuración recibe una negativa clara, sin gastar una llamada a Gemini ni tratarlo como un gasto.
 export function isConfigWrite(text:string|null):boolean{
- const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ');
- return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
+ const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
+ return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
 }
 
 // ---- Meses en español. El backend resuelve el mes; Gemini solo copia el fragmento.

@@ -144,6 +144,15 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.ok(r.length>0);assert.equal((await pending()).length,0);
  });
 
+ await t.test('frase que arranca con el tema (sin verbo): es configuración, no un gasto; el integrante recibe la negativa',async()=>{
+  const before=await expenses();
+  const r=await say(ANA,'Presupuesto mascotas 250mil',{action:'set_budget',category:'Alimentos y bebidas',amount:'250000',amountText:'250mil'});
+  assert.match(r,/Voy a fijar el presupuesto mensual de «Alimentos y bebidas» en \$250\.000/);
+  assert.equal(await expenses(),before,'no se registró ningún gasto');
+  await say(ANA,'cancelar');
+  assert.match(await say(BETO,'Presupuesto mascotas 250mil'),/solo para administradores/);assert.equal(await expenses(),before);
+ });
+
  await t.test('consultas: pendiente de gastos fijos y presupuesto restante (solo administradores)',async()=>{
   const r=await say(ANA,'¿Cuánto tengo pendiente de gastos fijos?');
   assert.match(r,/Gastos fijos de este mes: pagados \$180\.000/);assert.match(r,/Deudas de meses anteriores/);
