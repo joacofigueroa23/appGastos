@@ -12,6 +12,7 @@ import {declaredMime,DocumentError,failureReply,REJECTED_TYPE_REPLY,validateMedi
 import type {MediaFetcher} from './media';
 import type {DocumentExtractor} from './extraction';
 import {applyEdit,BLOCKED,canAutoRegister,buildInvoiceDraft,buildReceiptDraft,buildStatementDraft,classify,receiptProblems,type DraftContext,type Edit} from './draft';
+import {prepareBulkAction} from '../whatsapp/admin';
 import {withFixedMatch,withReceiptDuplicates,withStatementDuplicates} from './duplicates';
 import {fromCents,includedItems,primaryCategory,toCents} from './reconcile';
 import {COMMAND_HELP,invoiceSummary,receiptSummary,statementSummary,unknownSummary} from './summary';
@@ -112,6 +113,17 @@ export function documentProcessor(pool:Pool,deps:DocumentDeps){
    const {extraction,usage}=await deps.extract({bytes:fetched.bytes,mime,categories:ctx.categories.filter(c=>c.active).map(c=>c.name),today:ctx.today,familyCurrency:ctx.familyCurrency});
    await transaction(pool,async db=>{
     const viewer:Viewer={memberId:doc.member_id,role:owner.role};
+    // Una lista de presupuestos o de gastos fijos no es un comprobante: se convierte en UNA acción de administración para confirmar.
+    if(extraction.configList.kind&&extraction.configList.items.length){
+     const closed=await db.query("UPDATE appgastos.documents SET state='cancelled',kind='unknown',extraction=NULL,draft=NULL,usage=$3,result=$4,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_token=$2 AND state='processing'",
+      [doc.id,doc.lease_token,JSON.stringify(usage),JSON.stringify({handedTo:'admin_action',kind:extraction.configList.kind})]);
+     if(!closed.rowCount)return;
+     const reply=owner.role==='admin'
+      ?(await prepareBulkAction(db,doc.family_id,{id:doc.member_id},{kind:extraction.configList.kind,items:extraction.configList.items},new Date(),ctx.familyCurrency)).reply
+      :'Eso parece una lista de '+(extraction.configList.kind==='budget'?'presupuestos':'gastos fijos')+'. Solo los administradores pueden configurarlos, así que no hice ningún cambio.';
+     await enqueueReply(db,doc,'summary','document_ready',reply);
+     return;
+    }
     const built=await buildFor(db,doc,extraction,ctx,viewer);
     const r=await db.query(`UPDATE appgastos.documents SET state='needs_review',kind=$3,extraction=$4,draft=$5,usage=$6,error_code=NULL,lease_token=NULL,lease_until=NULL,updated_at=now()
      WHERE id=$1 AND lease_token=$2 AND state='processing'`,[doc.id,doc.lease_token,built.kind,JSON.stringify(extraction),built.draft?JSON.stringify(built.draft):null,JSON.stringify(usage)]);

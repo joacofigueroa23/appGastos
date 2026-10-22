@@ -46,8 +46,8 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   const month=async(m:string)=>(await json(await call('/api/budgets?month='+m,ana.token))).budgets.find((b:any)=>b.categoryId===alim);
   assert.equal((await month(cur)).amount,'500000.00');assert.equal((await month(addM(cur,4))).amount,'500000.00');
   // Importe que no coincide con el texto: no se acepta.
-  assert.match(await say(ANA,'Cambiá el presupuesto de Alimentación a 300 mil',{action:'set_budget',category:'Alimentos y bebidas',amount:'900000',amountText:'300 mil'}),/No pude entender el importe/);
-  assert.equal((await pending()).length,0);
+  assert.match(await say(ANA,'Cambiá el presupuesto de Alimentación a 300 mil',{action:'set_budget',category:'Alimentos y bebidas',amount:'900000',amountText:'300 mil'}),/¿De cuánto es\?/);
+  assert.equal((await pending())[0].action.type,'collecting','queda esperando el importe');await say(ANA,'cancelar');assert.equal((await pending()).length,0);
   // Excepción de un mes: la base no cambia.
   const target=addM(cur,2);
   await say(ANA,'Para '+monthName(target)+' poné el presupuesto de Alimentación en 350 mil',{action:'set_budget_month',category:'Alimentos y bebidas',amount:'350000',amountText:'350 mil',monthText:monthName(target)});
@@ -100,7 +100,7 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.match(await say(ANA,'Ya pagué el colegio',{action:'pay_fixed',fixed:'Colegio'}),/No encontré una obligación pendiente/);
   await q('UPDATE appgastos.fixed_expenses SET start_date=$2 WHERE id=$1',[f,addM(cur,-2)+'-01']);await call('/api/control/summary?month='+cur,ana.token);
   const r=await say(ANA,'Ya pagué el colegio',{action:'pay_fixed',fixed:'Colegio'});
-  assert.match(r,/varias obligaciones pendientes/);assert.equal((await pending()).length,0);assert.equal(await expenses(),1);
+  assert.match(r,/varias pendientes/);assert.equal((await pending())[0].action.type,'collecting');await say(ANA,'cancelar');assert.equal((await pending()).length,0);assert.equal(await expenses(),1);
  });
 
  await t.test('roles: un integrante no configura ni confirma acciones del administrador, y no pasa por Gemini',async()=>{
@@ -124,7 +124,7 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.match(await say(ANA,'confirmar'),/venció/);assert.equal(await count("SELECT count(*)::int n FROM appgastos.categories WHERE name='Viajes'"),0);
   await say(ANA,'Creá la categoría Plantas',{action:'create_category',name:'Plantas'});
   const r=await say(ANA,'Creá la categoría Souvenirs',{action:'create_category',name:'Souvenirs'});
-  assert.match(r,/Reemplacé tu pedido anterior/);assert.equal((await pending()).length,1);
+  assert.match(r,/Dejé de lado tu pedido anterior/);assert.equal((await pending()).length,1);
   await say(ANA,'confirmar');
   assert.equal(await count("SELECT count(*)::int n FROM appgastos.categories WHERE name IN ('Plantas','Souvenirs')"),1,'solo se aplica el último');
  });
@@ -159,6 +159,23 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.match(r,/Voy a agregar el gasto fijo «Academia» de \$100\.000/);assert.equal(await expenses(),before);
   await say(ANA,'cancelar');
   assert.match(await say(BETO,'Anota Gasto fijo 100mil en el colegio'),/solo para administradores/);assert.equal(await expenses(),before);
+ });
+
+ await t.test('conversación con memoria: "Registrar gasto fijo de 100000 en impuestos" → pregunta el día → "Vence el 10" completa el MISMO pedido (no es un gasto)',async()=>{
+  const before=await expenses();
+  const first=await say(ANA,'Registrar gasto fijo de 100000 en impuestos',{action:'create_fixed',name:'Impuestos',amount:'100000',amountText:'100000'});
+  assert.match(first,/¿Qué día del mes vence\?/);assert.equal((await pending())[0].action.type,'collecting');
+  // La respuesta corta no llama a Gemini ni cae en el flujo de gastos.
+  const calls0=calls.admin;
+  const second=await say(ANA,'Vence el 10');
+  assert.equal(calls.admin,calls0);assert.match(second,/Voy a agregar el gasto fijo «Impuestos» de \$100\.000, vence el día 10, categoría «Impuestos & Seguros»/);
+  assert.equal(await expenses(),before,'no se registró ningún gasto');
+  assert.match(await say(ANA,'confirmar'),/Agregué el gasto fijo «Impuestos»/);
+  assert.equal((await q("SELECT due_day FROM appgastos.fixed_expenses WHERE name='Impuestos'")).rows[0].due_day,10);
+  // Una respuesta larga que repite todo el pedido también sirve (la interpreta Gemini).
+  await say(ANA,'Registrar gasto fijo de 80000 en gimnasio',{action:'create_fixed',name:'Gimnasio',amount:'80000',amountText:'80000'});
+  assert.match(await say(ANA,'80000 de gasto fijo en gimnasio vence el 5 de cada mes',{action:'create_fixed',name:'Gimnasio',amount:'80000',amountText:'80000',dueDay:5,category:'Educación'}),/Voy a agregar el gasto fijo «Gimnasio»/);
+  await say(ANA,'cancelar');
  });
 
  await t.test('consultas: pendiente de gastos fijos y presupuesto restante (solo administradores)',async()=>{

@@ -15,7 +15,8 @@ export interface AdminIntent {
  monthText:string|null;  // fragmento literal ("diciembre", "noviembre 2026", "este mes")
  dueDay:number|null;active:boolean|null;paymentMethod:PaymentCode|null;
 }
-export interface AdminContext {text:string;referenceDate:string;categories:{name:string;parent:string|null}[];fixed:string[]}
+// pending: el pedido que quedó a medias y lo que se le preguntó al administrador (asking); el mensaje nuevo lo completa o lo corrige.
+export interface AdminContext {text:string;referenceDate:string;categories:{name:string;parent:string|null}[];fixed:string[];pending?:{intent:AdminIntent;asking:string}}
 export type AdminInterpreter=(context:AdminContext)=>Promise<AdminIntent>;
 export type AdminGenerate=(params:GenerateContentParameters)=>Promise<{text?:string}>;
 
@@ -87,6 +88,7 @@ set_budget_month (presupuesto distinto solo para UN mes: category, amount, month
 set_fixed_amount (cambiar el importe de un gasto fijo existente: fixed, amount, monthText si dice "desde <mes>"), set_fixed_active (activar o desactivar un gasto fijo: fixed, active),
 pay_fixed (el usuario avisa que YA PAGÓ una obligación fija: fixed, monthText del mes pagado si lo dice, amount si dice un importe distinto, paymentMethod si lo dice), none (cualquier otra cosa: un gasto común, una pregunta, etc.).
 amount es decimal canónico sin separador de miles ("$500.000" => "500000"); amountText es el fragmento literal que lo respalda ("500.000", "15 mil"). monthText es un fragmento literal ("diciembre", "noviembre", "este mes").
+Si hay pedidoPendiente, el mensaje responde a preguntaPendiente (o corrige el pedido): devolvé la MISMA action del pedido y SOLO los datos presentes en el mensaje nuevo (el resto null); si el mensaje es otro pedido distinto, devolvé su action y datos. Entendé frases coloquiales y abreviadas ("vence el 10", "son 100 lucas", "anotalo", "sumá", "poné", "cargá", "registrá") igual que las formales.
 category, parent y fixed deben elegirse entre los nombres del contexto (copiá el nombre exacto); si no hay uno claro, null. Mercado Pago, MP, QR y billetera son paymentMethod wallet.`;
 export function geminiAdminInterpreter(generate?:AdminGenerate):AdminInterpreter{
  return async ctx=>{
@@ -94,7 +96,7 @@ export function geminiAdminInterpreter(generate?:AdminGenerate):AdminInterpreter
   const ai=generate?null:new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY,httpOptions:{timeout:30000}});
   const s={type:Type.STRING,nullable:true};
   const models=(process.env.GEMINI_MODEL||'gemini-3.5-flash-lite,gemini-3.1-flash-lite').split(',').map(m=>m.trim()).filter(Boolean);
-  const params:GenerateContentParameters={model:models[0],contents:JSON.stringify({message:ctx.text,hoy:ctx.referenceDate,categorias:ctx.categories,gastosFijos:ctx.fixed}),
+  const params:GenerateContentParameters={model:models[0],contents:JSON.stringify({message:ctx.text,hoy:ctx.referenceDate,categorias:ctx.categories,gastosFijos:ctx.fixed,...(ctx.pending?{pedidoPendiente:ctx.pending.intent,preguntaPendiente:ctx.pending.asking}:{})}),
    config:{systemInstruction:SYSTEM,responseMimeType:'application/json',temperature:0,responseSchema:{type:Type.OBJECT,properties:{
     action:{type:Type.STRING,enum:[...ADMIN_ACTIONS]},name:s,parent:s,category:s,fixed:s,amount:s,amountText:s,monthText:s,dueDay:{type:Type.INTEGER,nullable:true},active:{type:Type.BOOLEAN,nullable:true},
     paymentMethod:{...s,enum:[...PAYMENT_CODES]},

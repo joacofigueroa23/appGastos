@@ -14,7 +14,7 @@ const png=()=>Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0
 const pdf=(pages=1)=>Buffer.from('%PDF-1.4\n'+Array.from({length:pages},(_,i)=>`${i+1} 0 obj << /Type /Page /Parent 9 0 R >> endobj\n`).join('')+'1 0 obj << /Type /Pages >> endobj\n');
 const ctx:DraftContext={categories:[{id:'c-ali',name:'Alimentos',active:true},{id:'c-lim',name:'Limpieza',active:true},{id:'c-hig',name:'Higiene personal',active:true},{id:'c-old',name:'Vieja',active:false}],cards:[{id:'k1',name:'Visa',active:true,cardType:null}],familyCurrency:'ARS',today:'2026-10-20'};
 const names=ctx.categories.map(c=>c.name);
-const blank:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:null,totalAmount:null,taxesIncluded:null,items:[],discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,category:null,warnings:[],missingFields:[]};
+const blank:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:null,totalAmount:null,taxesIncluded:null,items:[],discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,category:null,configList:{kind:null,items:[]},warnings:[],missingFields:[]};
 
 test('Archivos: tipo real, tamaño y páginas (no alcanza con el tipo declarado)',()=>{
  assert.equal(detectType(jpeg()),'image/jpeg');assert.equal(detectType(png()),'image/png');assert.equal(detectType(pdf()),'application/pdf');
