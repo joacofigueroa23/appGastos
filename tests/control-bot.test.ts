@@ -153,6 +153,14 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.match(await say(BETO,'Presupuesto mascotas 250mil'),/solo para administradores/);assert.equal(await expenses(),before);
  });
 
+ await t.test('"Anota gasto fijo 100mil en el colegio": configuración (con cualquier verbo), no un gasto; el integrante recibe la negativa',async()=>{
+  const before=await expenses();
+  const r=await say(ANA,'Anota Gasto fijo 100mil en el colegio',{action:'create_fixed',name:'Academia',amount:'100000',amountText:'100mil',dueDay:10,category:'Educación'});
+  assert.match(r,/Voy a agregar el gasto fijo «Academia» de \$100\.000/);assert.equal(await expenses(),before);
+  await say(ANA,'cancelar');
+  assert.match(await say(BETO,'Anota Gasto fijo 100mil en el colegio'),/solo para administradores/);assert.equal(await expenses(),before);
+ });
+
  await t.test('consultas: pendiente de gastos fijos y presupuesto restante (solo administradores)',async()=>{
   const r=await say(ANA,'¿Cuánto tengo pendiente de gastos fijos?');
   assert.match(r,/Gastos fijos de este mes: pagados \$180\.000/);assert.match(r,/Deudas de meses anteriores/);
