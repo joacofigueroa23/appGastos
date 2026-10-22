@@ -6,6 +6,13 @@ import {budgetService} from './service';
 export function registerBudgets(app:Express,pool:Pool|null){
  const route=apiRoute(pool);
  app.get('/api/budgets',route(async(req,res,db,family,actor)=>{res.json(await budgetService(db,family,actor.memberId).report(req.query.month as string));}));
+ // Presupuesto base recurrente (se renueva solo cada mes). Antes que las rutas por mes: 'base' no es un mes.
+ app.put('/api/budgets/base/:categoryId',route(async(req,res,db,family,actor)=>{
+  await budgetService(db,family,actor.memberId).setBase(req.params.categoryId,req.body?.amount,req.body?.from);res.sendStatus(204);
+ }));
+ app.delete('/api/budgets/base/:categoryId',route(async(req,res,db,family,actor)=>{
+  await budgetService(db,family,actor.memberId).endBase(req.params.categoryId,req.query.from);res.sendStatus(204);
+ }));
  app.put('/api/budgets/:month/:categoryId',route(async(req,res,db,family,actor)=>{
   await budgetService(db,family,actor.memberId).set(req.params.month,req.params.categoryId,req.body?.amount);res.sendStatus(204);
  }));

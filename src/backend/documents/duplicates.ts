@@ -1,4 +1,6 @@
 import type {Connection} from '../expenses/repository';
+import {normalizeName} from '../whatsapp/candidate';
+import {generateOccurrences} from '../fixed/service';
 import type {DraftLine,DuplicateRef,ReceiptDraft,StatementDraft} from './types';
 // Coincidencias financieras con gastos ya cargados: misma moneda, mismo importe exacto y fecha cercana.
 // Solo ve gastos que el pedido tiene permiso de ver (author = límite de un integrante) y solo el administrador ve quién los cargó:
@@ -30,6 +32,30 @@ export async function withReceiptDuplicates(db:Connection,family:string,viewer:{
  const duplicates=await findDuplicates(db,family,viewer,{date:d.date,amount:d.total,currency:d.currency});
  // Si hay UNA sola coincidencia, se propone vincularla (el usuario igual confirma). Con varias, no se elige por él.
  return {...d,duplicates,linkExpenseId:duplicates.length===1&&!d.noExpense?duplicates[0].expenseId:null};
+}
+const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const tokens=(s:string)=>normalizeName(s).split(/[^a-z0-9]+/).filter(t=>t.length>=4);
+// Un comprobante de pago que coincide en importe exacto y en nombre con UNA obligación fija pendiente de ese mes (o el contiguo): se propone
+// saldarla. Solo para administradores (un integrante no ve obligaciones). Si ya hay un gasto parecido cargado, manda la vinculación (no se duplica).
+export async function withFixedMatch(db:Connection,family:string,d:ReceiptDraft):Promise<ReceiptDraft>{
+ if(!d.date||d.total===null||d.noExpense||d.duplicates.length||d.linkExpenseId)return d;
+ // Las obligaciones del mes del comprobante y los contiguos se generan si faltan (idempotente).
+ const month=d.date.slice(0,7),shift=(n:number)=>new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7))-1+n,1)).toISOString().slice(0,7);
+ await generateOccurrences(db,family,shift(-1),month);
+ const rows=(await db.query(`SELECT o.id,o.expense_id,f.name,f.category_id AS "categoryId",to_char(o.period,'YYYY-MM') AS period FROM appgastos.fixed_expense_occurrences o JOIN appgastos.fixed_expenses f ON f.id=o.fixed_expense_id
+  WHERE o.family_id=$1 AND f.currency=$2 AND o.expected_amount=$3::numeric AND o.period BETWEEN (date_trunc('month',$4::date)-interval '1 month')::date AND date_trunc('month',$4::date)::date`,[family,d.currency,d.total,d.date])).rows as {id:string;expense_id:string|null;name:string;categoryId:string;period:string}[];
+ const words=new Set(tokens((d.merchant||'')+' '+d.description));
+ const named=rows.filter(r=>tokens(r.name).some(t=>words.has(t)));
+ // Manda la obligación del mes del comprobante (si ya está pagada o hay dudas, no se propone nada); solo si no hay ninguna de ese mes se mira la
+ // del mes anterior (pago atrasado). El mes siguiente no se toca. Más de una candidata = ambiguo: no se propone.
+ const prev=shift(-1),here=named.filter(r=>r.period===month),before=named.filter(r=>r.period===prev);
+ // La obligación de ese mes ya figura pagada (con un gasto que ya tiene su comprobante): no se crea otro gasto. Si fuera otro pago, el usuario responde «es gasto».
+ if(here.length===1&&here[0].expense_id)return {...d,noExpense:true,noExpenseReason:'«'+here[0].name+' de '+MONTHS[Number(month.slice(5,7))-1]+' de '+month.slice(0,4)+'» ya figura como pagado: no se crea otro gasto. Si es otro pago distinto, respondé *es gasto*.'};
+ const open=(here.length?here:before).filter(r=>!r.expense_id);
+ if(open.length!==1||(here.length?here:before).length!==1)return d;
+ const o=open[0];
+ return {...d,settle:{occurrenceId:o.id,categoryId:o.categoryId,label:o.name+' de '+MONTHS[Number(o.period.slice(5,7))-1]+' de '+o.period.slice(0,4)},
+  items:d.items.map(i=>i.categoryId?i:{...i,categoryId:o.categoryId})};
 }
 export async function withStatementDuplicates(db:Connection,family:string,viewer:{author?:string;admin:boolean},d:StatementDraft):Promise<StatementDraft>{
  // shortcut: una consulta por línea (hasta DOCUMENT_MAX_LINES=200, ~1 s); con resúmenes más largos conviene una sola consulta por lote.

@@ -147,6 +147,8 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await click('Confirmar y registrar');
     await waitFor(async()=>(await text()).includes('Todavía falta'),'No pidió los datos que faltan.');
     await field('[aria-label="Categoría de Jabon"]',hogar);
+    // Una corrección a la vez: se espera a que la pantalla termine de guardar antes de la siguiente (el control queda deshabilitado mientras tanto).
+    await waitFor(()=>evaluate("!document.querySelector('[aria-label=\"Medio de pago del comprobante\"]').disabled"),'La pantalla siguió ocupada tras la categoría.');
     await field('[aria-label="Medio de pago del comprobante"]','cash');
     // Cada corrección se guarda en el servidor: se espera a que esté en la base y a que el botón vuelva a estar disponible.
     await waitFor(async()=>(await db.pool.query("SELECT draft->>'paymentMethod' AS p FROM appgastos.documents")).rows[0].p==='cash','No guardó el medio de pago.');
@@ -178,7 +180,7 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await field('[aria-label="Presupuesto de Compras"]','100000');
     await evaluate('document.querySelector(\'[aria-label="Presupuesto de Compras"]\').parentElement.querySelector("button").click()');
     await waitFor(async()=>(await text()).includes('Presupuesto guardado.'),'No guardó el presupuesto.');
-    assert.equal((await db.pool.query("SELECT amount::text a FROM appgastos.budgets WHERE month='2026-10-01'")).rows[0].a,'100000.00');
+    assert.equal((await db.pool.query("SELECT amount::text a FROM appgastos.budget_bases WHERE effective_from='2026-10-01'")).rows[0].a,'100000.00');
     await click('Panel Central');
     await field('[aria-label="Mes del dashboard"]','2026-10');
     await waitFor(async()=>(await text()).includes('Presupuesto del mes')&&(await text()).includes('100.000'),'El panel no muestra el presupuesto.');
@@ -189,14 +191,14 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await waitFor(async()=>(await text()).includes('Gasto fijo creado.'),'No creó el gasto fijo.');
     assert.equal((await db.pool.query('SELECT count(*)::int n FROM appgastos.fixed_expenses')).rows[0].n,1);
     // Vencida (el día 10 de octubre de 2026 ya pasó): queda a la vista y se marca como pagada creando el gasto real.
-    await waitFor(async()=>(await text()).includes('Vencidas sin pagar (1)'),'La obligación vencida no quedó a la vista.');
+    await waitFor(async()=>(await text()).includes('Vencidas y deudas anteriores (1)'),'La obligación vencida no quedó a la vista.');
     await click('Marcar como pagada');
     await field('[aria-label="Medio de pago del pago"]','transfer');
     await click('Confirmar pago');
     await waitFor(async()=>(await text()).includes('Pago registrado.'),'No registró el pago.');
     const paid=(await db.pool.query("SELECT e.scope,e.payment_method,o.link_source FROM appgastos.fixed_expense_occurrences o JOIN appgastos.expenses e ON e.id=o.expense_id")).rows;
     assert.deepEqual(paid.map(r=>[r.scope,r.payment_method,r.link_source]),[['household','transfer','manual']]);
-    await waitFor(async()=>!(await text()).includes('Vencidas sin pagar ('),'Siguió figurando como vencida.');
+    await waitFor(async()=>!(await text()).includes('Vencidas y deudas anteriores ('),'Siguió figurando como vencida.');
     await click('Cerrar sesión');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Email"]\')'),'No cerró la sesión del administrador.');
     await command('Browser.close');

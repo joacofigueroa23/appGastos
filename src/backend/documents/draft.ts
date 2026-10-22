@@ -97,7 +97,7 @@ export function receiptProblems(d:ReceiptDraft,ctx:DraftContext):string[]{
 // Registro automático por el bot: solo un ticket o comprobante de pago COMPLETO (importe, fecha, categorías y medio de pago válidos), que no sea
 // "no es gasto", ni coincida con un gasto ya cargado (eso se pregunta). Todo lo demás espera la respuesta del usuario.
 export const autoRegisterEnabled=()=>process.env.DOCUMENT_AUTO_REGISTER!=='false';
-export const canAutoRegister=(d:ReceiptDraft,ctx:DraftContext)=>autoRegisterEnabled()&&!d.noExpense&&!d.linkExpenseId&&d.duplicates.length===0&&receiptProblems(d,ctx).length===0;
+export const canAutoRegister=(d:ReceiptDraft,ctx:DraftContext)=>autoRegisterEnabled()&&!d.settle&&!d.noExpense&&!d.linkExpenseId&&d.duplicates.length===0&&receiptProblems(d,ctx).length===0;
 
 // ---- Ediciones del borrador. Las usan el chat y la web: así hay una sola regla.
 export type Edit=
@@ -105,7 +105,7 @@ export type Edit=
  |{type:'paymentMethod';value:PaymentCode}|{type:'cardId';value:string|null}|{type:'noExpense';value:boolean}|{type:'link';expenseId:string|null}
  |{type:'itemCategory';itemId:number;categoryId:string|null}|{type:'itemExcluded';itemId:number;excluded:boolean}
  |{type:'lineCategory';lineId:number;categoryId:string|null}|{type:'lineExcluded';lineId:number;excluded:boolean}
- |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
+ |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'settle';occurrenceId:null}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
 export type EditResult={draft:ReceiptDraft|StatementDraft;error?:undefined}|{draft?:undefined;error:string};
 const fail=(error:string):EditResult=>({error});
 export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftContext):EditResult{
@@ -147,6 +147,7 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
   case 'link':
    if(edit.expenseId&&!d.duplicates.some(x=>x.expenseId===edit.expenseId))return fail('Ese gasto no está entre las coincidencias.');
    d={...d,linkExpenseId:edit.expenseId,noExpense:edit.expenseId?false:d.noExpense};break;
+  case 'settle':d={...d,settle:null};break;
   case 'itemCategory':{
    const item=d.items.find(i=>i.id===edit.itemId);
    if(!item)return fail('Ese concepto no existe.');

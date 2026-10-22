@@ -1,7 +1,7 @@
 import type {Pool} from 'pg';
 import type {Actor} from '../accounts/policy';
 import {expenseService} from '../expenses/service';
-import {transaction} from '../expenses/repository';
+import {inTransaction} from '../expenses/repository';
 import {ApiError} from '../shared/errors';
 import {object,uuid} from '../shared/validators';
 import {referenceDate} from '../whatsapp/candidate';
@@ -11,7 +11,7 @@ import {referenceDate} from '../whatsapp/candidate';
 export async function payOccurrence(pool:Pool,family:string,actor:Actor,occurrenceId:string,body:unknown){
  const input=object(body);
  if(Object.keys(input).some(k=>!['paymentMethod','cardId','amount','date'].includes(k)))throw new ApiError(400,'Campos del pago inválidos.');
- return transaction(pool,async db=>{
+ return inTransaction(pool,async db=>{
   const o=(await db.query(`SELECT o.id,o.expense_id,o.expected_amount::text AS amount,o.installment_number AS n,f.name,f.category_id AS "categoryId",f.installments_total AS total,f.currency
    FROM appgastos.fixed_expense_occurrences o JOIN appgastos.fixed_expenses f ON f.id=o.fixed_expense_id WHERE o.family_id=$1 AND o.id=$2 FOR UPDATE OF o`,[family,uuid(occurrenceId)])).rows[0];
   if(!o)throw new ApiError(404,'Obligación inexistente.');

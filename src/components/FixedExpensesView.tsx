@@ -2,6 +2,8 @@ import React,{useCallback,useEffect,useState} from 'react';
 import {financeApi} from '../services/financeApi';
 import {useFinance} from '../context/FinanceContext';
 import {expensesStamp,todayDateOnly} from '../utils/finance';
+import {categoryLabel,sortedCategories} from '../utils/categories';
+import {ControlSummary} from './ControlSummary';
 import {PAYMENT_CODES,PAYMENT_LABELS,type FixedExpense,type FixedOccurrence,type PaymentCode,type UnlinkedPayment} from '../shared/apiTypes';
 const STATUS={paid:['Pagada','bg-green-100 text-green-800'],pending:['Pendiente','bg-slate-100 text-slate-700'],overdue:['Vencida','bg-red-100 text-red-800']} as const;
 interface Paying {id:string;amount:string;date:string;method:PaymentCode}
@@ -14,7 +16,7 @@ export function FixedExpensesView(){
  const [items,setItems]=useState<FixedExpense[]>([]),[occurrences,setOccurrences]=useState<FixedOccurrence[]>([]),[unlinked,setUnlinked]=useState<UnlinkedPayment[]>([]),[late,setLate]=useState<FixedOccurrence[]>([]);
  const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null),[paying,setPaying]=useState<Paying|null>(null);
  const [form,setForm]=useState({name:'',categoryId:'',expectedAmount:'',dueDay:'10',startDate:todayDateOnly().slice(0,8)+'01',endDate:'',installmentsTotal:''});
- const [amounts,setAmounts]=useState<Record<string,string>>({}),[targets,setTargets]=useState<Record<string,string>>({});
+ const [amounts,setAmounts]=useState<Record<string,string>>({}),[targets,setTargets]=useState<Record<string,string>>({}),[froms,setFroms]=useState<Record<string,string>>({});
  const stamp=expensesStamp(apiExpenses);
  const load=useCallback(async()=>{
   try{
@@ -57,9 +59,10 @@ export function FixedExpensesView(){
   </div>
   {error&&<p role="alert" className="text-sm text-red-700">{error}</p>}
   {message&&<p role="status" className="text-sm text-green-700">{message}</p>}
+  <ControlSummary month={month}/>
   {late.length>0&&<section aria-label="Vencidas sin pagar" className={card+' border border-red-200'}>
-   <h2 className="text-lg font-bold text-red-800">Vencidas sin pagar ({late.length})</h2>
-   <p className="text-xs text-slate-500">De cualquier mes. Siguen acá hasta que se pagan.</p>
+   <h2 className="text-lg font-bold text-red-800">Vencidas y deudas anteriores ({late.length})</h2>
+   <p className="text-xs text-slate-500">De cualquier mes. Siguen acá hasta que se pagan; un pago atrasado se cuenta en el mes en que se paga y la obligación queda asociada a su mes de origen.</p>
    {late.map(o=>row(o,true))}
   </section>}
   <section aria-label="Resumen de obligaciones" className={card+' grid sm:grid-cols-3 gap-4 !space-y-0'}>
@@ -89,7 +92,8 @@ export function FixedExpensesView(){
     <div className="min-w-0"><p className="font-medium truncate">{f.name}{f.active?'':' (inactivo)'}</p><p className="text-xs text-slate-500">{f.categoryName} · día {f.dueDay} · desde {f.startDate}{f.endDate?' hasta '+f.endDate:''}{f.installmentsTotal?' · '+f.installmentsTotal+' cuotas':''}</p></div>
     <div className="flex items-center gap-2">
      <input aria-label={'Importe de '+f.name} inputMode="decimal" value={amounts[f.id]??''} onChange={e=>setAmounts(p=>({...p,[f.id]:e.target.value}))} className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-sm text-right"/>
-     <button disabled={busy||amounts[f.id]===f.expectedAmount} className="h-9 px-3 rounded-lg bg-accent text-white text-xs font-semibold disabled:opacity-40" onClick={()=>void run(()=>financeApi.updateFixedExpense(f.id,{expectedAmount:(amounts[f.id]||'').trim().replace(',','.')}),'Importe actualizado para este mes en adelante.')}>Guardar</button>
+     <input aria-label={'Vigencia del importe de '+f.name} title="El nuevo importe rige desde este mes; lo pagado y los meses anteriores no cambian" type="month" value={froms[f.id]??todayDateOnly().slice(0,7)} onChange={e=>setFroms(p=>({...p,[f.id]:e.target.value}))} className="h-9 rounded-lg border border-slate-200 px-2 text-xs"/>
+     <button disabled={busy||amounts[f.id]===f.expectedAmount} className="h-9 px-3 rounded-lg bg-accent text-white text-xs font-semibold disabled:opacity-40" onClick={()=>void run(()=>financeApi.updateFixedExpense(f.id,{expectedAmount:(amounts[f.id]||'').trim().replace(',','.'),effectiveFrom:froms[f.id]??todayDateOnly().slice(0,7)}),'Importe actualizado desde el mes elegido. Lo pagado y los meses anteriores no cambian.')}>Guardar</button>
      <button disabled={busy} className="text-xs text-blue-700" onClick={()=>void run(()=>financeApi.updateFixedExpense(f.id,{active:!f.active}),f.active?'Gasto fijo desactivado.':'Gasto fijo activado.')}>{f.active?'Desactivar':'Activar'}</button></div>
    </div>)}
    <form className="grid sm:grid-cols-3 gap-3 pt-2" onSubmit={e=>{e.preventDefault();void run(async()=>{
@@ -97,7 +101,7 @@ export function FixedExpensesView(){
      ...(form.endDate?{endDate:form.endDate}:{}),...(form.installmentsTotal?{installmentsTotal:Number(form.installmentsTotal)}:{})});
     setForm(p=>({...p,name:'',expectedAmount:'',endDate:'',installmentsTotal:''}));},'Gasto fijo creado.');}}>
     <input aria-label="Nombre del gasto fijo" placeholder="Nombre (ej. Colegio)" required maxLength={120} value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))} className={input}/>
-    <select aria-label="Categoría del gasto fijo" required value={form.categoryId} onChange={e=>setForm(p=>({...p,categoryId:e.target.value}))} className={input}><option value="">Categoría</option>{categories.filter(c=>c.active).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+    <select aria-label="Categoría del gasto fijo" required value={form.categoryId} onChange={e=>setForm(p=>({...p,categoryId:e.target.value}))} className={input}><option value="">Categoría</option>{sortedCategories(categories.filter(c=>c.active)).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}</option>)}</select>
     <input aria-label="Importe previsto" placeholder="Importe previsto" required inputMode="decimal" value={form.expectedAmount} onChange={e=>setForm(p=>({...p,expectedAmount:e.target.value}))} className={input}/>
     <label className="text-xs text-slate-500">Día de vencimiento<input aria-label="Día de vencimiento" type="number" min={1} max={31} required value={form.dueDay} onChange={e=>setForm(p=>({...p,dueDay:e.target.value}))} className={input+' w-full mt-1'}/></label>
     <label className="text-xs text-slate-500">Desde<input aria-label="Fecha de inicio" type="date" required value={form.startDate} onChange={e=>setForm(p=>({...p,startDate:e.target.value}))} className={input+' w-full mt-1'}/></label>

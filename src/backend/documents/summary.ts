@@ -18,6 +18,7 @@ export function receiptSummary(d:ReceiptDraft,ctx:DraftContext,code:string):stri
  if(out.length)lines.push('Excluidos: '+out.map(i=>i.description).join(', ')+'.');
  d.notes.forEach(n=>lines.push('⚠️ '+n));
  if(d.noExpense)lines.push('ℹ️ '+(d.noExpenseReason||'No se registra como gasto.'));
+ else if(d.settle)lines.push('🔗 Corresponde al gasto fijo «'+d.settle.label+'»: al confirmar registro UN gasto, lo marco como pagado y no descuenta de tus presupuestos. Si no es ese, respondé *no es gasto fijo*.');
  else if(d.linkExpenseId){
   const x=d.duplicates.find(y=>y.expenseId===d.linkExpenseId);
   lines.push('🔗 Se asociará al gasto que ya cargaste'+(x?' ('+money(x.amount,x.currency,ctx.familyCurrency)+', '+dmy(x.date)+')':'')+': no se crea otro.');

@@ -12,9 +12,13 @@ import {MAX_INTERPRETATION_ATTEMPTS,decide,loadCatalog,type Catalog,type Decisio
 import {ConversationChanged,commit} from './commit';
 import {parseLinkCommand} from '../accounts/linking';
 import {answerQuery,parseQuery} from './queries';
+import {referenceDate} from './candidate';
 import {documentCommand,documentProcessor,expireDocuments,type DocumentDeps} from '../documents/service';
 import {parseCommand} from '../documents/commands';
-export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender,documents?:DocumentDeps){
+import {adminCommand,prepareAdminAction} from './admin';
+import {geminiAdminInterpreter,isConfigWrite,looksLikeAdminRequest,type AdminInterpreter} from './adminIntent';
+export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender,documents?:DocumentDeps,adminInterpret?:AdminInterpreter){
+ let adminInterpreter=adminInterpret;
  const documentWorker=documents?documentProcessor(pool,documents):null;
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
@@ -49,11 +53,33 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
      const query=parseQuery(row.text_body);
      // Confirmar, cancelar o corregir un comprobante abierto. Su efecto es idempotente (confirmar dos veces no registra dos veces),
      // así que reprocesar este mensaje tras un corte no duplica nada.
-     const docReply=!query&&parseCommand(row.text_body!)!==null
+     const role=matches[0].role==='admin'?'admin' as const:'member' as const;
+     // Acción de administración pendiente (confirmar, cancelar o completar un dato). Solo se abre una transacción si hay algo pendiente o
+     // se confirma por código; su efecto es idempotente (confirmar dos veces no aplica dos veces), así que reprocesar tras un corte no duplica.
+     const cmd=query?null:parseCommand(row.text_body!);
+     const adminPending=!query&&(cmd?.type==='confirm'&&!!cmd.code||(await pool.query("SELECT 1 FROM appgastos.admin_actions WHERE family_id=$1 AND member_id=$2 AND state='pending'",[row.family_id,matches[0].id])).rowCount!>0);
+     const adminReply=adminPending?await transaction(pool,db=>adminCommand(pool,db,{id:matches[0].id,role},row.family_id,row.text_body!,!!conversation,at,catalog!.familyCurrency)):null;
+     const docReply=!query&&!adminReply&&parseCommand(row.text_body!)!==null
       ?await transaction(pool,db=>documentCommand(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation)):null;
-     if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};
+     if(adminReply)decision={kind:'reply',outcome:adminReply.outcome,reply:adminReply.reply};
+     else if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};
      else if(query){const a=await answerQuery(pool,row.family_id,{role:matches[0].role==='admin'?'admin':'member',memberId:matches[0].id},query,at,catalog.familyCurrency);decision={kind:'reply',outcome:a.outcome,reply:a.reply};}
-     else decision=await decide(pool,interpret,row,at,catalog,conversation);
+     else{
+      // Configuración por WhatsApp: solo administradores. Gemini interpreta la frase; el backend valida y pide confirmación.
+      let admin:{outcome:'admin_config';reply:string}|null=null;
+      if(!conversation&&role==='admin'&&looksLikeAdminRequest(row.text_body)&&(adminInterpreter||process.env.GEMINI_API_KEY)){
+       try{
+        adminInterpreter??=geminiAdminInterpreter();
+        const cats=(await pool.query('SELECT c.name,p.name AS parent FROM appgastos.categories c LEFT JOIN appgastos.categories p ON p.id=c.parent_id WHERE c.family_id=$1 AND c.active',[row.family_id])).rows;
+        const fixed=(await pool.query('SELECT name FROM appgastos.fixed_expenses WHERE family_id=$1',[row.family_id])).rows.map((r:{name:string})=>r.name);
+        const intent=await adminInterpreter({text:row.text_body!,referenceDate:referenceDate(at),categories:cats,fixed});
+        admin=await prepareAdminAction(pool,row.family_id,{id:matches[0].id},intent,at,catalog.familyCurrency);
+       }catch{admin=null;} // sin interpretación: sigue como un gasto común
+      }
+      if(admin)decision={kind:'reply',outcome:admin.outcome,reply:admin.reply};
+      else if(role==='member'&&isConfigWrite(row.text_body))decision={kind:'reply',outcome:'admin_denied',reply:'Esa operación es solo para administradores.'};
+      else decision=await decide(pool,interpret,row,at,catalog,conversation);
+     }
     }
    }
    await transaction(pool,db=>commit(pool,db,row,at,decision,catalog,conversation));

@@ -2,21 +2,23 @@ import type {Pool} from 'pg';
 import type {Actor} from '../accounts/policy';
 import {budgetReport} from '../budgets/service';
 import {fixedService} from '../fixed/service';
+import {controlSummary} from '../finance/summary';
 import {normalizeName,referenceDate} from './candidate';
 import {formatAmount} from './replies';
 // Consultas financieras por WhatsApp. Se reconocen con reglas deterministas (nunca Gemini) y se responden con SQL que aplica
 // los mismos permisos que la web: el rol sale del número vinculado, no de lo que diga el mensaje.
 export type QueryIntent=
  |{kind:'my_total'}|{kind:'my_top_category'}|{kind:'my_last'}|{kind:'my_category';category:string}
- |{kind:'family_total'}|{kind:'budget_left';category:string}|{kind:'fixed_due_week'}|{kind:'by_member'};
-export const ADMIN_ONLY:readonly QueryIntent['kind'][]=['family_total','budget_left','fixed_due_week','by_member'];
+ |{kind:'family_total'}|{kind:'budget_left';category:string}|{kind:'fixed_due_week'}|{kind:'by_member'}|{kind:'fixed_pending'};
+export const ADMIN_ONLY:readonly QueryIntent['kind'][]=['family_total','budget_left','fixed_due_week','by_member','fixed_pending'];
 export const QUERY_DENIED='Esa consulta es solo para administradores.';
 const clean=(text:string)=>normalizeName(text).replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
 // Anclado al inicio: "Gasté 35 mil en Carrefour" es un gasto, no una consulta.
 export function parseQuery(text:string|null):QueryIntent|null{
  const t=clean(text??'');let m:RegExpExecArray|null;
  if(/^cuanto (gastamos|llevamos gastado|se gasto)\b/.test(t))return {kind:'family_total'};
- if((m=/^cuanto queda (?:del|de) presupuesto (?:de |del |para )?(.+?)(?: este mes)?$/.exec(t)))return {kind:'budget_left',category:m[1]};
+ if(/^cuanto (?:tengo |tenemos |hay |queda |falta |debo |debemos )?(?:pendiente|por pagar|para pagar|de pagar|a pagar)(?: de| en)? (?:los |mis )?gastos fijos(?: este mes)?$/.test(t)||/^cuanto (?:tengo |tenemos |debo |debemos )(?:de )?gastos fijos pendientes$/.test(t))return {kind:'fixed_pending'};
+ if((m=/^cuanto (?:me |nos )?queda (?:del|de) presupuesto (?:de |del |para )?(.+?)(?: este mes)?$/.exec(t)))return {kind:'budget_left',category:m[1]};
  if(/^(que )?(gastos fijos|vencimientos|obligaciones)( que)? (vencen|vence)\b|^que vence esta semana\b|^que gastos fijos vencen\b/.test(t))return {kind:'fixed_due_week'};
  if(/^(cuanto gasto cada integrante|cuanto gasto cada uno|gasto por integrante)\b/.test(t))return {kind:'by_member'};
  if(/^en que categoria gaste mas\b/.test(t))return {kind:'my_top_category'};
@@ -35,7 +37,7 @@ export async function answerQuery(pool:Pool,family:string,actor:Actor,intent:Que
  const lines=`FROM appgastos.expense_lines l JOIN appgastos.categories c ON c.family_id=l.family_id AND c.id=l.category_id
   WHERE l.family_id=$1 AND l.currency=$2 AND l.date>=$3::date AND l.date<($3::date+interval '1 month')`;
  const reply=(text:string)=>({outcome:'query' as const,reply:text});
- const categories=(await pool.query('SELECT id,name FROM appgastos.categories WHERE family_id=$1',[family])).rows as {id:string;name:string}[];
+ const categories=(await pool.query('SELECT id,name,parent_id FROM appgastos.categories WHERE family_id=$1',[family])).rows as {id:string;name:string;parent_id:string|null}[];
  const findCategory=(raw:string)=>{
   const exact=categories.find(c=>same(c.name,raw));if(exact)return exact;
   const part=categories.filter(c=>normalizeName(c.name).includes(normalizeName(raw)));return part.length===1?part[0]:undefined;
@@ -69,10 +71,19 @@ export async function answerQuery(pool:Pool,family:string,actor:Actor,intent:Que
     WHERE e.family_id=$1 AND e.currency=$2 AND e.date>=$3::date AND e.date<($3::date+interval '1 month') GROUP BY m.name ORDER BY sum(e.amount) DESC,m.name`,[family,familyCurrency,first])).rows;
    return reply(rows.length?'Gasto por integrante este mes: '+rows.map(r=>`${r.name} ${money(r.total)}`).join('; ')+'.':'Este mes todavía no hay gastos registrados.');
   }
+  case 'fixed_pending':{
+   const s=await controlSummary(pool,family,month,today),f=s.fixed;
+   return reply(`Gastos fijos de este mes: pagados ${money(f.paid.amount)}, pendientes ${money(f.pending.amount)} (${f.pending.count}${Number(f.overdue.amount)?`, vencidos ${money(f.overdue.amount)}`:''}).`+(f.previousDebts.count?` Deudas de meses anteriores: ${money(f.previousDebts.amount)} (${f.previousDebts.count}).`:' No hay deudas de meses anteriores.'));
+  }
   case 'budget_left':{
    const c=findCategory(intent.category);if(!c)return reply('No encontré esa categoría.');
-   const line=(await budgetReport(pool,family,month)).budgets.find(b=>b.categoryId===c.id);
-   if(!line)return reply(`No hay presupuesto cargado para ${c.name} este mes.`);
+   const report=await budgetReport(pool,family,month),line=report.budgets.find(b=>b.categoryId===c.id);
+   if(!line){
+    // Una subcategoría sin límite propio cuenta dentro del presupuesto de su categoría principal.
+    const parent=report.budgets.find(b=>categories.find(x=>x.id===c.id&&(x as {parent_id?:string|null}).parent_id===b.categoryId));
+    if(parent)return reply(`${c.name} no tiene presupuesto propio: cuenta dentro de ${parent.categoryName}, que lleva ${money(parent.spent)} de ${money(parent.amount)} (quedan ${money(parent.available)}).`);
+    return reply(`No hay presupuesto cargado para ${c.name} este mes.`);
+   }
    return reply(`${c.name}: presupuesto ${money(line.amount)}, gastado ${money(line.spent)} (${line.percent.toLocaleString('es-AR')}%). ${line.exceeded?'Te pasaste por '+money(String(-Number(line.available)))+'.':'Quedan '+money(line.available)+'.'}`);
   }
   case 'fixed_due_week':{

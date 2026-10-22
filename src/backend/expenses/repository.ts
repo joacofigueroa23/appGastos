@@ -8,6 +8,12 @@ const columns = [
   'e.card_id AS "cardId"', 'e.reported_by_member_id AS "reportedByMemberId"', 'e.scope', 'e.source', 'e.document_id AS "documentId"', 'e.installments', 'e.refunded_amount::text AS "refundedAmount"',
   'e.created_at AS "createdAt"', 'e.updated_at AS "updatedAt"',
 ].join(', ');
+// Con un Pool abre una transacción; con una conexión que ya está en una (el bot de WhatsApp) corre dentro de ella. El pool es de UNA
+// conexión: abrir una transacción anidada desde adentro de otra se quedaría esperando para siempre.
+export function inTransaction<T>(db: Pool | Connection, work: (db: PoolClient) => Promise<T>): Promise<T> {
+  // Un PoolClient también tiene connect(): lo que distingue a un Pool es totalCount.
+  return 'totalCount' in db ? transaction(db as Pool, work) : work(db as PoolClient);
+}
 export async function transaction<T>(pool: Pool, work: (db: PoolClient) => Promise<T>): Promise<T> {
   const db = await pool.connect();
   try { await db.query('BEGIN'); const result = await work(db); await db.query('COMMIT'); return result; }
@@ -63,5 +69,5 @@ export async function updateExpense(db: Connection, familyId: string, id: string
   return (await findExpense(db,familyId,id))!;
 }
 export async function listCategories(db: Connection, familyId: string) {
-  return (await db.query('SELECT id,family_id AS "familyId",name,active,created_at AS "createdAt" FROM appgastos.categories WHERE family_id=$1 ORDER BY name,id',[familyId])).rows;
+  return (await db.query('SELECT id,family_id AS "familyId",name,active,created_at AS "createdAt",parent_id AS "parentId" FROM appgastos.categories WHERE family_id=$1 ORDER BY name,id',[familyId])).rows;
 }

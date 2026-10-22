@@ -1,4 +1,5 @@
 import { ManualExpenseForm } from './ManualExpenseForm';
+import {categoryLabel,sortedCategories} from '../utils/categories';
 import {PAYMENT_CODES,PAYMENT_LABELS} from '../shared/apiTypes';
 import type { ApiExpense } from '../shared/apiTypes';
 import React, { useState } from 'react';
@@ -204,7 +205,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({ onOpenAddExpense }) 
               className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl outline-none bg-white text-slate-700"
             >
               <option value="all">Todas las categorías</option>
-              {isDemoMode?EXPENSE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>):categories.map(c=><option key={c.id} value={c.id}>{c.name}{c.active?'':' (inactiva)'}</option>)}
+              {isDemoMode?EXPENSE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>):sortedCategories(categories).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}{c.active?'':' (inactiva)'}</option>)}
             </select>
           </div>
 

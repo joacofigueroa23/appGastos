@@ -1,6 +1,6 @@
 import type {Pool} from 'pg';
 import {normalizeAmount} from '../expenses/validation';
-import {transaction,type Connection} from '../expenses/repository';
+import {inTransaction,type Connection} from '../expenses/repository';
 import {ApiError} from '../shared/errors';
 import {object,text,uuid} from '../shared/validators';
 import {monthStart} from '../shared/route';
@@ -15,12 +15,17 @@ const TEMPLATE=`f.id,f.name,f.category_id AS "categoryId",c.name AS "categoryNam
 const FROM_TEMPLATE='FROM appgastos.fixed_expenses f JOIN appgastos.categories c ON c.family_id=f.family_id AND c.id=f.category_id';
 
 function validate(body:unknown,creating:boolean){
- const input=object(body),allowed=['name','categoryId','expectedAmount','dueDay','startDate','endDate','installmentsTotal','active'];
+ const input=object(body),allowed=['name','categoryId','expectedAmount','effectiveFrom','dueDay','startDate','endDate','installmentsTotal','active'];
  if(!Object.keys(input).length||Object.keys(input).some(k=>!allowed.includes(k)))throw new ApiError(400,'Campos del gasto fijo inválidos.');
  const out:Record<string,unknown>={},has=(k:string)=>Object.hasOwn(input,k);
  if(creating||has('name'))out.name=text(input.name,'name',120);
  if(creating||has('categoryId'))out.categoryId=uuid(input.categoryId,'categoryId');
  if(creating||has('expectedAmount'))out.expectedAmount=normalizeAmount(input.expectedAmount);
+ // Vigencia del nuevo importe (YYYY-MM): sin ella rige desde el mes actual. Solo acompaña a expectedAmount.
+ if(has('effectiveFrom')){
+  if(!has('expectedAmount')||creating)throw new ApiError(400,'effectiveFrom solo se usa junto con expectedAmount al modificar.');
+  out.effectiveFrom=monthStart(input.effectiveFrom,'effectiveFrom');
+ }
  if(creating||has('dueDay')){
   if(!Number.isInteger(input.dueDay)||(input.dueDay as number)<1||(input.dueDay as number)>31)throw new ApiError(400,'El día de vencimiento debe estar entre 1 y 31.');
   out.dueDay=input.dueDay;
@@ -50,7 +55,8 @@ const categoryExists=async(db:Connection,family:string,id:unknown)=>{
 const NUMBER=(a:string)=>`((EXTRACT(year FROM ${a}.period)-EXTRACT(year FROM f.start_date))*12+EXTRACT(month FROM ${a}.period)-EXTRACT(month FROM f.start_date))::int+1`;
 export async function generateOccurrences(db:Connection,family:string,fromKey:string,toKey=fromKey){
  await db.query(`INSERT INTO appgastos.fixed_expense_occurrences(family_id,fixed_expense_id,period,due_date,expected_amount,installment_number)
-  SELECT f.family_id,f.id,p.period,(p.period + (LEAST(f.due_day,EXTRACT(day FROM (p.period + interval '1 month' - interval '1 day'))::int) - 1))::date,f.expected_amount,${NUMBER('p')}
+  SELECT f.family_id,f.id,p.period,(p.period + (LEAST(f.due_day,EXTRACT(day FROM (p.period + interval '1 month' - interval '1 day'))::int) - 1))::date,
+  COALESCE((SELECT h.amount FROM appgastos.fixed_expense_amounts h WHERE h.fixed_expense_id=f.id AND h.effective_from<=p.period ORDER BY h.effective_from DESC LIMIT 1),f.expected_amount),${NUMBER('p')}
   FROM appgastos.fixed_expenses f
   CROSS JOIN LATERAL (SELECT g::date AS period FROM generate_series(
     GREATEST(f.start_date - (EXTRACT(day FROM f.start_date)::int - 1),$2::date,($3::date - interval '120 months')::date),$3::date,interval '1 month') g) p
@@ -96,22 +102,33 @@ export function fixedService(pool:Pool,family:string){
   list:async():Promise<FixedExpense[]>=>(await pool.query(`SELECT ${TEMPLATE} ${FROM_TEMPLATE} WHERE f.family_id=$1 ORDER BY f.active DESC,f.name,f.id`,[family])).rows,
   async create(body:unknown){
    const v=validate(body,true);await categoryExists(pool,family,v.categoryId);
-   const r=await pool.query(`INSERT INTO appgastos.fixed_expenses(family_id,name,category_id,expected_amount,currency,start_date,due_day,end_date,installments_total,active)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[family,v.name,v.categoryId,v.expectedAmount,CURRENCY,v.startDate,v.dueDay,v.endDate??null,v.installmentsTotal??null,v.active??true]);
-   return (await pool.query(`SELECT ${TEMPLATE} ${FROM_TEMPLATE} WHERE f.id=$1`,[r.rows[0].id])).rows[0] as FixedExpense;
+   return inTransaction(pool,async db=>{
+    const r=await db.query(`INSERT INTO appgastos.fixed_expenses(family_id,name,category_id,expected_amount,currency,start_date,due_day,end_date,installments_total,active)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[family,v.name,v.categoryId,v.expectedAmount,CURRENCY,v.startDate,v.dueDay,v.endDate??null,v.installmentsTotal??null,v.active??true]);
+    // Historial de importes: el inicial rige desde el mes de inicio.
+    await db.query('INSERT INTO appgastos.fixed_expense_amounts(fixed_expense_id,family_id,effective_from,amount) VALUES($1,$2,$3::date-(EXTRACT(day FROM $3::date)::int-1),$4)',[r.rows[0].id,family,v.startDate,v.expectedAmount]);
+    return (await db.query(`SELECT ${TEMPLATE} ${FROM_TEMPLATE} WHERE f.id=$1`,[r.rows[0].id])).rows[0] as FixedExpense;
+   });
   },
   // Cambiar el importe o el día afecta solo a ocurrencias SIN pagar de este mes en adelante. Lo pagado y lo anterior no se reescribe.
   async update(id:string,body:unknown){
    const v=validate(body,false);if(v.categoryId)await categoryExists(pool,family,v.categoryId);
-   return transaction(pool,async db=>{
+   return inTransaction(pool,async db=>{
     const prev=(await db.query('SELECT start_date,end_date FROM appgastos.fixed_expenses WHERE family_id=$1 AND id=$2 FOR UPDATE',[family,uuid(id)])).rows[0];
     if(!prev)throw new ApiError(404,'Gasto fijo inexistente.');
-    const map:Record<string,string>={name:'name',categoryId:'category_id',expectedAmount:'expected_amount',dueDay:'due_day',startDate:'start_date',endDate:'end_date',installmentsTotal:'installments_total',active:'active'};
+    const map:Record<string,string>={name:'name',categoryId:'category_id',dueDay:'due_day',startDate:'start_date',endDate:'end_date',installmentsTotal:'installments_total',active:'active'};
     const args:unknown[]=[family,id],sets=['updated_at=now()'];
     for(const [k,col] of Object.entries(map))if(Object.hasOwn(v,k)){args.push(v[k]);sets.push(col+'=$'+args.length);}
     await db.query(`UPDATE appgastos.fixed_expenses SET ${sets.join(',')} WHERE family_id=$1 AND id=$2`,args);
     const current=referenceDate(new Date()).slice(0,7)+'-01';
-    if(v.expectedAmount)await db.query('UPDATE appgastos.fixed_expense_occurrences SET expected_amount=$3 WHERE family_id=$1 AND fixed_expense_id=$2 AND expense_id IS NULL AND period>=$4::date',[family,id,v.expectedAmount,current]);
+    // Nuevo importe: queda en el historial con su vigencia y alcanza solo a las obligaciones SIN pagar desde ese mes. Lo pagado y lo anterior no se reescribe.
+    if(v.expectedAmount){
+     const from=(v.effectiveFrom as string|undefined)??current;
+     await db.query('INSERT INTO appgastos.fixed_expense_amounts(fixed_expense_id,family_id,effective_from,amount) VALUES($1,$2,$3::date,$4) ON CONFLICT(fixed_expense_id,effective_from) DO UPDATE SET amount=EXCLUDED.amount',[id,family,from,v.expectedAmount]);
+     await db.query('UPDATE appgastos.fixed_expenses SET expected_amount=COALESCE((SELECT amount FROM appgastos.fixed_expense_amounts WHERE fixed_expense_id=$1 AND effective_from<=$2::date ORDER BY effective_from DESC LIMIT 1),expected_amount) WHERE id=$1',[id,current]);
+     await db.query(`UPDATE appgastos.fixed_expense_occurrences o SET expected_amount=(SELECT h.amount FROM appgastos.fixed_expense_amounts h WHERE h.fixed_expense_id=o.fixed_expense_id AND h.effective_from<=o.period ORDER BY h.effective_from DESC LIMIT 1)
+      WHERE o.family_id=$1 AND o.fixed_expense_id=$2 AND o.expense_id IS NULL AND o.period>=$3::date`,[family,id,from]);
+    }
     // Si cambian inicio, fin, cuotas o el estado, las ocurrencias SIN pagar que ya no corresponden se quitan (una fecha mal cargada no deja
     // "vencidas" fantasma) y las restantes se renumeran. Las pagadas no se tocan nunca.
     await db.query(`DELETE FROM appgastos.fixed_expense_occurrences o USING appgastos.fixed_expenses f WHERE f.id=o.fixed_expense_id AND f.id=$1 AND o.expense_id IS NULL AND (
@@ -124,11 +141,11 @@ export function fixedService(pool:Pool,family:string){
   },
   async occurrences(monthKey:string):Promise<FixedOccurrence[]>{
    const period=monthStart(monthKey);
-   return transaction(pool,async db=>{await generateOccurrences(db,family,monthKey);return listOccurrences(db,family,'o.period=$3::date',[period]);});
+   return inTransaction(pool,async db=>{await generateOccurrences(db,family,monthKey);return listOccurrences(db,family,'o.period=$3::date',[period]);});
   },
   // Todo lo que venció y sigue sin pagar, de cualquier mes: queda a la vista hasta que se pague.
   async overdue():Promise<FixedOccurrence[]>{
-   return transaction(pool,async db=>{await generateOccurrences(db,family,'0001-01',referenceDate(new Date()).slice(0,7));return listOccurrences(db,family,'o.expense_id IS NULL AND o.due_date < $2::date');});
+   return inTransaction(pool,async db=>{await generateOccurrences(db,family,'0001-01',referenceDate(new Date()).slice(0,7));return listOccurrences(db,family,'o.expense_id IS NULL AND o.due_date < $2::date');});
   },
   // Gastos de la casa del mes que no pagan ninguna obligación: el administrador decide si corresponde vincularlos.
   async unlinked(monthKey:string){
@@ -139,7 +156,7 @@ export function fixedService(pool:Pool,family:string){
   },
   async link(occurrenceId:string,expenseId:unknown){
    const expense=uuid(expenseId,'expenseId');
-   return transaction(pool,async db=>{
+   return inTransaction(pool,async db=>{
     const o=(await db.query('SELECT id,expense_id FROM appgastos.fixed_expense_occurrences WHERE family_id=$1 AND id=$2 FOR UPDATE',[family,uuid(occurrenceId)])).rows[0];
     if(!o)throw new ApiError(404,'Obligación inexistente.');
     if(o.expense_id)throw new ApiError(409,'La obligación ya está pagada.');
