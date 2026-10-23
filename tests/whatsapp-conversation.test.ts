@@ -176,8 +176,8 @@ test('Conversación WhatsApp: PostgreSQL aislado, varios mensajes, un gasto',{ti
   await t.test('6. categoría no resoluble vuelve a preguntar',async()=>{
    script.set('Gasté 900 en efectivo',{amount:'900',amountText:'900',paymentMethod:'cash',paymentMethodText:'efectivo',category:'Inventada'});
    const r=await say('Gasté 900 en efectivo');
-   assert.equal(r.outcome,'question');assert.match(lastReply(),/^No pude tomar: categoría inexistente, inactiva o ambigua\. ¿En qué categoría/);
-   const again=await say('xyz');assert.equal(again.outcome,'unrecognized');assert.match(lastReply(),/^No entendí la respuesta\. ¿En qué categoría/);
+   assert.equal(r.outcome,'question');assert.match(lastReply(),/^No entendí bien la categoría. ¿En qué categoría/);
+   const again=await say('xyz');assert.equal(again.outcome,'unrecognized');assert.match(lastReply(),/^No te entendí bien. ¿En qué categoría/);
    await say('cancelar');
   });
 
@@ -250,16 +250,16 @@ test('Conversación WhatsApp: PostgreSQL aislado, varios mensajes, un gasto',{ti
    assert.equal(byType.outcome,'registered');assert.equal((await expense(byType.expense_id)).card_id,mcSantander);
    script.set('Gasté 1000 en Carrefour con Mastercard',{...carrefour,amount:'1000',amountText:'1000',card:'Mastercard'});
    const noType=await say('Gasté 1000 en Carrefour con Mastercard');
-   assert.equal(noType.outcome,'question');assert.match(lastReply(),/^No pude tomar: tarjeta ambigua\. ¿Con qué tarjeta\?|^No pude tomar: tarjeta ambigua\. ¿Cómo pagaste\?/);
+   assert.equal(noType.outcome,'question');assert.match(lastReply(),/^No entendí bien la tarjeta. ¿Con qué tarjeta\?|^No entendí bien la tarjeta. ¿Cómo pagaste\?/);
    await say('cancelar');
    script.set('Gasté 1000 en Carrefour con Amex crédito',{...carrefour,amount:'1000',amountText:'1000',card:'Amex',paymentMethod:'credit_card',paymentMethodText:'crédito'});
    const ambiguous=await say('Gasté 1000 en Carrefour con Amex crédito');
-   assert.equal(ambiguous.outcome,'question');assert.equal(lastReply(),'No pude tomar: tarjeta ambigua. ¿Con qué tarjeta? 1) Amex Dos  2) Amex Uno  3) Mastercard Galicia  4) Visa  5) Ninguna');
+   assert.equal(ambiguous.outcome,'question');assert.equal(lastReply(),'No entendí bien la tarjeta. ¿Con qué tarjeta? 1) Amex Dos  2) Amex Uno  3) Mastercard Galicia  4) Visa  5) Ninguna');
    const chosen=await say('Amex Uno');
    assert.equal(chosen.outcome,'registered');assert.equal((await expense(chosen.expense_id)).card_id,amexUno);
    script.set('Gasté 1000 en Carrefour con Cabal crédito',{...carrefour,amount:'1000',amountText:'1000',card:'Cabal',paymentMethod:'credit_card',paymentMethodText:'crédito'});
    const inactive=await say('Gasté 1000 en Carrefour con Cabal crédito');
-   assert.equal(inactive.outcome,'question');assert.match(lastReply(),/^No pude tomar: tarjeta inexistente o inactiva\. ¿Con qué tarjeta\?/);
+   assert.equal(inactive.outcome,'question');assert.match(lastReply(),/^No entendí bien la tarjeta. ¿Con qué tarjeta\?/);
    assert.doesNotMatch(lastReply(),/Cabal/);
    const none=await say('ninguna');
    assert.equal(none.outcome,'registered');const e=await expense(none.expense_id);assert.equal(e.card_id,null);assert.equal(e.payment_method,'credit_card');
@@ -307,7 +307,7 @@ test('Conversación WhatsApp: PostgreSQL aislado, varios mensajes, un gasto',{ti
    script.set('pagué con algo raro',()=>{throw new Error('down');});
    const failed=await say('pagué con algo raro');
    assert.equal(failed.outcome,'interpretation_error');assert.equal(failed.last_error,'interpretation_unknown');
-   assert.equal(lastReply(),'No pude interpretar el mensaje. El gasto pendiente sigue guardado. ¿Cuánto gastaste?');
+   assert.equal(lastReply(),'No pude entender ese mensaje. El gasto pendiente sigue guardado. ¿Cuánto gastaste?');
    const after=await active();assert.equal(after.id,before.id);assert.deepEqual({...after.draft,options:undefined},{...before.draft,options:undefined});assert.equal(after.unknown_count,0);
    let busy=true;
    script.set('fueron unos 35 mil',()=>{if(busy)throw new InterpretationError('transient','http_503');return undefined as never;});
