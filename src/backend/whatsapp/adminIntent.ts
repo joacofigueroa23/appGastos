@@ -41,9 +41,19 @@ const CONFIG_TOPIC=/\b(categoria|categorias|subcategoria|presupuesto|presupuesto
 const PAID=/\b(ya pague|pague el|pague la|pague los|pague las|ya se pago|ya esta pagado|ya esta pagada|pagamos el|pagamos la)\b/;
 // Una frase que ARRANCA con el tema («Presupuesto mascotas 250mil») también es configuración aunque no lleve verbo.
 const TOPIC_FIRST=/^(?:el |mi |un |nuevo )?(?:presupuesto|gasto fijo|subcategoria|categoria)\b/;
+// Señales de algo recurrente o de una obligación («100 lucas por mes», «vencen el 10»): un pedido de configuración aunque no lleve verbo.
+const RECURRING=/\b(por mes|mensual(?:es|mente)?|cada mes|todos los meses|vence(?:n)? el|vencimiento)\b/;
+// Un gasto evidente («gasté 5 mil en el súper») no necesita clasificarse: va directo al flujo de gastos.
+const SPENT=/\b(gaste|pague|compre|me costo|salio|gastamos|pagamos)\b/;
+export function likelyExpense(text:string|null):boolean{
+ const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
+ return SPENT.test(t)&&!RECURRING.test(t)&&!CONFIG_TOPIC.test(t);
+}
+// ADMIN_AI_ROUTING=keywords apaga la clasificación con Gemini de los mensajes ambiguos de administradores (queda solo el filtro por palabras).
+export const aiRoutesAll=()=>process.env.ADMIN_AI_ROUTING!=='keywords';
 export function looksLikeAdminRequest(text:string|null):boolean{
  const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
- return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||STRONG_TOPIC.test(t)||PAID.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
+ return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||STRONG_TOPIC.test(t)||RECURRING.test(t)||PAID.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
 }
 // Pedido de configuración «fuerte»: verbo + tema, frase que arranca con el tema o «gasto fijo». Si Gemini no está disponible, un pedido así NO se trata como un gasto.
 export function isStrongConfig(text:string|null):boolean{

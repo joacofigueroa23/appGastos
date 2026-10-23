@@ -44,9 +44,18 @@ export function draftSummary(draft:ExpenseDraft,catalog:{categories:CatalogEntry
  if(draft.merchant)parts.push('en '+draft.merchant.value);else if(category)parts.push('en '+category);
  return parts.length?parts.join(' '):'sin datos todavía';
 }
+const PLAIN:[RegExp,string][]=[[/fecha/,'la fecha'],[/monto|importe/,'el importe'],[/categor/,'la categoría'],[/medio de pago/,'el medio de pago'],[/tarjeta/,'la tarjeta'],[/moneda/,'la moneda'],[/comercio/,'el comercio']];
 // Errores de campo convertidos en un aviso previo a la pregunta.
 export function fieldNotice(errors:string[]):string{
- return errors.length?'No pude tomar: '+[...new Set(errors)].join('; ')+'. ':'';
+ if(!errors.length)return '';
+ // Lo técnico («fecha inválida o ambigua») se dice en cristiano: «No entendí bien la fecha».
+ const unique=[...new Set(errors)],plain:string[]=[],raw:string[]=[];
+ for(const e of unique){
+  const unclear=/(ambigu|inv\u00e1lid|invalid|sin respaldo|inexistente|inactiv)/.test(e);
+  const what=PLAIN.find(([r])=>r.test(e))?.[1];
+  if(unclear&&what)plain.push(what);else raw.push(e);
+ }
+ return (plain.length?'No entendí bien '+[...new Set(plain)].join(', ')+'. ':'')+(raw.length?'No pude tomar: '+raw.join('; ')+'. ':'');
 }
 
 export const REPLIES={
@@ -56,16 +65,16 @@ export const REPLIES={
  editGone:'No pude corregir el gasto: ya no existe o una referencia dejó de estar disponible. ',
  nothingToCancel:'No tenés ningún gasto pendiente para cancelar.',
  conflict:(summary:string)=>'Tenés un gasto pendiente ('+summary+'). Respondé la pregunta o escribí "cancelar" para empezar otro.',
- unknown:'No entendí la respuesta. ',
+ unknown:'No te entendí bien. ',
  tooManyUnknown:'No pude entender las respuestas, así que cancelé el gasto pendiente. No se registró nada. Podés empezar de nuevo cuando quieras.',
  corrected:'Corregido. ',
- help:'Para registrar un gasto contame cuánto gastaste, dónde y cómo pagaste. Ej: "Gasté 35 mil en Carrefour con débito".',
- notInterpreted:'No pude interpretar el mensaje. ',
+ help:'Contame tu gasto con el monto, el lugar y cómo pagaste (ej: "Gasté 35 mil en Carrefour con débito"), o mandame una foto de un ticket o una factura. También podés preguntarme cuánto gastaste este mes.',
+ notInterpreted:'No pude entender ese mensaje. ',
  unavailable:'El servicio de interpretación no está disponible ahora. ',
  keptDraft:'El gasto pendiente sigue guardado. ',
  notRegistered:'No se registró ningún gasto; ',
  failed:'No pude procesar tu mensaje. Intenta de nuevo con otro texto o usa la carga manual.',
- unsupported:'Por ahora solo puedo recibir gastos por texto. No proceso imágenes, audio ni documentos.',
+ unsupported:'Por ahora entiendo texto, fotos y PDF. Los audios y otros archivos todavía no los puedo leer.',
  unauthorized:'Este número no está vinculado a un integrante de la familia. Si ya tenés cuenta, generá un código en Mi perfil y enviá: VINCULAR <código>.',
  linked:'Listo, vinculé este número con tu cuenta. Desde ahora tus gastos quedan a tu nombre.',
  linkInvalid:'El código no es válido o venció. Generá uno nuevo en Mi perfil y enviá: VINCULAR <código>.',

@@ -266,6 +266,27 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   assert.match(replies.at(-1)!.text,/ya estaba aplicada/);assert.equal(await count("SELECT count(*)::int n FROM appgastos.categories WHERE name='Viajes largos'"),1);
  });
 
+
+ await t.test('mensaje ambiguo de un administrador, sin palabras clave: se clasifica con Gemini (se puede apagar); un gasto evidente no lo gasta; los errores se dicen en cristiano',async()=>{
+  const phrase='El gimnasio sale 90 mil y se paga el 5';
+  const before=calls.admin;
+  const r=await say(ANA,phrase,{action:'create_fixed',name:'Gimnasio',amount:'90000',amountText:'90 mil',dueDay:5,category:'Educación'});
+  assert.equal(calls.admin,before+1);assert.match(r,/Voy a agregar el gasto fijo «Gimnasio» de \$90\.000, vence el día 5/);
+  await say(ANA,'cancelar');
+  // Apagado: solo el filtro por palabras → este mensaje sigue como un gasto común (no llega a la administración).
+  process.env.ADMIN_AI_ROUTING='keywords';
+  try{
+   const c0=calls.admin;
+   app.interpret({});
+   assert.match(await say(ANA,phrase),/Contame tu gasto/);assert.equal(calls.admin,c0);assert.equal((await pending()).length,0);
+  }finally{delete process.env.ADMIN_AI_ROUTING;}
+  // Un gasto evidente nunca gasta una clasificación.
+  const c1=calls.admin;app.interpret({amount:'500',amountText:'500',merchant:'kiosco',description:'Kiosco',dateText:'el otro día',category:'Alimentos y bebidas'});
+  const e=await say(ANA,'Gasté 500 en el kiosco el otro día');
+  assert.equal(calls.admin,c1);assert.match(e,/No entendí bien la fecha\./);assert.doesNotMatch(e,/inv[aá]lida|ambigua/);
+  await say(ANA,'cancelar');
+ });
+
  await t.test('consultas: pendiente de gastos fijos y presupuesto restante (solo administradores)',async()=>{
   const r=await say(ANA,'¿Cuánto tengo pendiente de gastos fijos?');
   assert.match(r,/Gastos fijos de este mes: pagados \$/);assert.match(r,/Deudas de meses anteriores/);

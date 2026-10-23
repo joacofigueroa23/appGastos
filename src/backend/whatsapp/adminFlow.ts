@@ -1,7 +1,7 @@
 import type {Pool} from 'pg';
 import {normalizeName,referenceDate} from './candidate';
 import {actionToIntent,answerToAsk,correctionPatch,mergeIntent,prepareAdminAction,type StoredAction} from './admin';
-import {isStrongConfig,looksLikeAdminRequest,type AdminContext,type AdminInterpreter} from './adminIntent';
+import {aiRoutesAll,isStrongConfig,likelyExpense,looksLikeAdminRequest,type AdminContext,type AdminInterpreter} from './adminIntent';
 // Ruta de un mensaje de TEXTO de un administrador hacia la configuración conversacional. Devuelve la respuesta o null (no era para esto).
 //  1) Pedido "juntando datos" (el bot hizo una pregunta): el mensaje es la respuesta. Se completa con reglas simples y, si hace falta, con Gemini.
 //     Así «Vence el 10» continúa «Registrar gasto fijo de 100000 en impuestos» en vez de tomarse como un gasto.
@@ -18,11 +18,14 @@ export async function adminFlow(pool:Pool,interpreter:()=>AdminInterpreter|null,
  const collecting=pending?.type==='collecting'?pending:null;
  const ready=pending&&pending.type!=='collecting'?pending:null;
  const wantsConfig=looksLikeAdminRequest(p.text),strong=isStrongConfig(p.text);
+ // Un mensaje ambiguo de un administrador (ni gasto evidente ni palabra de configuración) también se clasifica con Gemini: «El colegio sale 180 mil y se paga el 10».
+ // Si no era configuración, Gemini responde none y el mensaje sigue su camino de gasto. Un fallo de Gemini acá nunca bloquea el gasto.
+ const classify=!wantsConfig&&aiRoutesAll()&&!likelyExpense(p.text)&&normalizeName(p.text).split(' ').length>=3;
  const normalized=normalizeName(p.text);
  const looksExpense=EXPENSE_VERBS.test(normalized)&&!wantsConfig;
  const answering=!p.hasConversation&&!looksExpense&&!!(collecting||ready);
  // Con un gasto en curso (conversación de Fase 1), "sí/no/el 10" son de ese gasto: solo un pedido de configuración claro entra por acá.
- if(!answering&&!(wantsConfig&&(!p.hasConversation||strong)))return null;
+ if(!answering&&!((wantsConfig||classify)&&(!p.hasConversation||strong)))return null;
  const categories=(await pool.query('SELECT id,name,active,parent_id FROM appgastos.categories WHERE family_id=$1',[p.family])).rows as {id:string;name:string;active:boolean;parent_id:string|null}[];
  const today=referenceDate(p.at);
  const context=(pendingIntent?:AdminContext['pending']):AdminContext=>({text:p.text,referenceDate:today,pending:pendingIntent,
@@ -52,7 +55,7 @@ export async function adminFlow(pool:Pool,interpreter:()=>AdminInterpreter|null,
   if(!wantsConfig)return null;
  }
  // 3) Pedido nuevo.
- if(!wantsConfig)return null;
+ if(!wantsConfig&&!(classify&&!p.hasConversation))return null;
  const intent=await ask(context());
  if(!intent)return strong?{outcome:'admin_config',reply:RETRY_REPLY}:null;
  return prepareAdminAction(pool,p.family,{id:p.memberId},intent,p.at,p.familyCurrency);

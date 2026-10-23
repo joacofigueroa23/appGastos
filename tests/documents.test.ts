@@ -113,7 +113,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   const count=(await docs()).length;
   await send(EXTRA,'ticket');assert.equal((await docs()).length,count);assert.match(replies.at(-1)!.text,/no está vinculado/);
   // Audio, video y sticker siguen sin soportarse.
-  await enqueue(app.db.pool,INITIAL_FAMILY_ID,[{id:'wamid.audio',sender:BETO,text:null,type:'audio',receivedAt:new Date()}]);await settle();assert.match(replies.at(-1)!.text,/solo puedo recibir gastos por texto/i);
+  await enqueue(app.db.pool,INITIAL_FAMILY_ID,[{id:'wamid.audio',sender:BETO,text:null,type:'audio',receivedAt:new Date()}]);await settle();assert.match(replies.at(-1)!.text,/audios y otros archivos todavía no los puedo leer/i);
   assert.equal(await expenses(),0);await clean();
  });
 

@@ -178,6 +178,8 @@ test('Sesión individual en el navegador: login, autor del gasto y vinculación 
     await field('[aria-label="Mes del presupuesto"]','2026-10');
     await waitFor(()=>evaluate('!!document.querySelector(\'[aria-label="Presupuesto de Compras"]\')'),'No mostró las categorías del presupuesto.');
     await field('[aria-label="Presupuesto de Compras"]','100000');
+    // El botón se habilita cuando la pantalla termina de registrar el importe escrito: se espera antes de tocarlo.
+    await waitFor(()=>evaluate('!document.querySelector(\'[aria-label="Presupuesto de Compras"]\').parentElement.querySelector("button").disabled'),'El botón de guardar el presupuesto no se habilitó.');
     await evaluate('document.querySelector(\'[aria-label="Presupuesto de Compras"]\').parentElement.querySelector("button").click()');
     await waitFor(async()=>(await text()).includes('Presupuesto guardado.'),'No guardó el presupuesto.');
     assert.equal((await db.pool.query("SELECT amount::text a FROM appgastos.budget_bases WHERE effective_from='2026-10-01'")).rows[0].a,'100000.00');
