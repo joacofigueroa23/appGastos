@@ -7,7 +7,9 @@ import {budgetService} from '../budgets/service';
 import {fixedService,generateOccurrences} from '../fixed/service';
 import {payOccurrence} from '../fixed/pay';
 import type {Connection} from '../expenses/repository';
-import {normalizeName,normalizeTextAmount,referenceDate} from './candidate';
+import {normalizeName,normalizeTextAmount,referenceDate,resolveDate} from './candidate';
+import {isDateOnly} from '../../utils/finance';
+import {effectiveBudgets} from '../budgets/service';
 import {formatAmount} from './replies';
 import {addMonths,parseMonthText,upcomingMonth,type AdminIntent,type MonthRef} from './adminIntent';
 import {parseCommand} from '../documents/commands';
@@ -15,8 +17,8 @@ import {parseCommand} from '../documents/commands';
 // PENDIENTE con un código; recién al confirmar se ejecuta, con los mismos servicios (y reglas) que usa la web. Nada se ejecuta por lo que
 // diga el modelo. La identidad y el rol salen del número vinculado, nunca del mensaje.
 // Si falta un dato, el pedido queda "juntando datos" (type collecting): el bot pregunta, recuerda lo ya dicho y la próxima respuesta lo completa.
-export interface BulkBudgetItem {name:string;amount:string;categoryId:string|null;categoryName:string|null}
-export interface BulkFixedItem {name:string;amount:string;dueDay:number|null;categoryId:string|null;categoryName:string|null}
+export interface BulkBudgetItem {name:string;amount:string;categoryId:string|null;categoryName:string|null;current?:string|null}
+export interface BulkFixedItem {name:string;amount:string;dueDay:number|null;categoryId:string|null;categoryName:string|null;exists?:boolean}
 export type StoredAction=
  |{type:'collecting';intent:AdminIntent;asking:AskField;question:string}
  |{type:'create_category';name:string;parentId:string|null;parentName:string|null}
@@ -25,10 +27,10 @@ export type StoredAction=
  |{type:'create_fixed';name:string;amount:string;dueDay:number;categoryId:string|null;categoryName:string|null;startMonth:string}
  |{type:'set_fixed_amount';fixedId:string;fixedName:string;amount:string;from:string}
  |{type:'set_fixed_active';fixedId:string;fixedName:string;active:boolean}
- |{type:'pay_fixed';occurrenceId:string;fixedName:string;period:string;amount:string;paymentMethod:PaymentCode|null}
+ |{type:'pay_fixed';occurrenceId:string;fixedName:string;period:string;amount:string;paymentMethod:PaymentCode|null;date?:string|null}
  |{type:'bulk_budget';items:BulkBudgetItem[];from:string;createMissing:boolean}
  |{type:'bulk_fixed';items:BulkFixedItem[];startMonth:string};
-export type AskField='name'|'amount'|'dueDay'|'category'|'fixed'|'month';
+export type AskField='name'|'amount'|'dueDay'|'category'|'fixed'|'month'|'date';
 const TTL_MINUTES=15;
 const CODE_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode=()=>Array.from({length:4},()=>CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join('');
@@ -56,9 +58,18 @@ const needAmount=(i:AdminIntent)=>{
 };
 
 // ---- Respuesta corta a lo que se preguntó: reglas deterministas antes de consultar a Gemini.
-export function answerToAsk(asking:AskField,text:string,categories:Row[]):Partial<AdminIntent>|null{
+// Fecha de un pago: «ayer», «el 8», «8/10», «8 de octubre». Nunca futura. null si no se entiende.
+export function parsePaymentDate(raw:string,today:string):string|null{
+ const t=normalizeName(raw).replace(/^(?:fue |lo pague |pague |pagado |el dia |el |dia )+/,'').trim();
+ const day=/^(\d{1,2})$/.exec(t);
+ const date=day?today.slice(0,7)+'-'+day[1].padStart(2,'0'):resolveDate(t,today);
+ return date&&isDateOnly(date)&&date<=today?date:null;
+}
+const dmy=(d:string)=>d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(0,4);
+export function answerToAsk(asking:AskField,text:string,categories:Row[],today=referenceDate(new Date())):Partial<AdminIntent>|null{
  const t=text.trim();
  if(!t||t.split(/\s+/).length>5)return null;
+ if(asking==='date')return parsePaymentDate(t,today)?{dateText:t}:null;
  if(asking==='dueDay'){const m=/\b(3[01]|[12]\d|[1-9])\b/.exec(normalizeName(t));return m?{dueDay:Number(m[1])}:null;}
  if(asking==='amount'){const a=normalizeTextAmount(t);return a?{amount:a,amountText:t}:null;}
  if(asking==='month'){return parseMonthText(t)?{monthText:t}:null;}
@@ -79,7 +90,7 @@ export function mergeIntent(base:AdminIntent,patch:Partial<AdminIntent>):AdminIn
 }
 
 // ---- Preparación: valida y deja la acción pendiente (o juntando datos). No cambia ninguna configuración.
-export async function prepareAdminAction(db:Connection,family:string,member:{id:string},intent:AdminIntent,at:Date,familyCurrency:string):Promise<{outcome:'admin_config';reply:string}|null>{
+export async function prepareAdminAction(db:Connection,family:string,member:{id:string},intent:AdminIntent,at:Date,familyCurrency:string,opts:{prefix?:string}={}):Promise<{outcome:'admin_config';reply:string}|null>{
  if(intent.action==='none')return null;
  const today=referenceDate(at),cur=today.slice(0,7);
  const categories=(await db.query('SELECT id,name,active,parent_id FROM appgastos.categories WHERE family_id=$1',[family])).rows as Row[];
@@ -137,16 +148,19 @@ export async function prepareAdminAction(db:Connection,family:string,member:{id:
     if(!candidates.length)throw new Ask(alreadyPaid?'«'+f.name+'» ya figura como pagado en ese mes, así que no registré nada.':'No encontré una obligación pendiente de «'+f.name+'»'+(monthRef?' para ese mes':'')+'.');
     if(candidates.length>1)throw new Ask('«'+f.name+'» tiene varias pendientes: '+candidates.slice(0,6).map(o=>monthLabel(o.period)).join(', ')+'. ¿De qué mes es el pago?','month');
     const o=candidates[0],amount=intent.amountText?needAmount(intent):o.amount;
-    action={type:'pay_fixed',occurrenceId:o.id,fixedName:f.name,period:o.period,amount,paymentMethod:intent.paymentMethod};break;
+    // Fecha efectiva del pago: la que diga el usuario (nunca futura); si no dice ninguna, hoy.
+    let date:string|null=null;
+    if(intent.dateText){date=parsePaymentDate(intent.dateText,today);if(!date)throw new Ask('No pude entender esa fecha de pago (o todavía no pasó). ¿Qué día fue? Por ejemplo «ayer» o «8/10».','date');}
+    action={type:'pay_fixed',occurrenceId:o.id,fixedName:f.name,period:o.period,amount,paymentMethod:intent.paymentMethod,date};break;
    }
   }
  }catch(error){
   if(!(error instanceof Ask))throw error;
   // Con campo: queda guardado para completarlo con la próxima respuesta. Sin campo: respuesta final.
-  if(error.field)return store(db,family,member.id,{type:'collecting',intent,asking:error.field,question:error.message},at,familyCurrency,error.message);
+  if(error.field)return store(db,family,member.id,{type:'collecting',intent,asking:error.field,question:error.message},at,familyCurrency,error.message,opts.prefix);
   return {outcome:'admin_config',reply:error.message};
  }
- return store(db,family,member.id,action,at,familyCurrency);
+ return store(db,family,member.id,action,at,familyCurrency,undefined,opts.prefix);
 }
 
 // ---- Listas (fotos de presupuestos o de gastos fijos): se arma UNA acción con todas las líneas y se confirma una vez.
@@ -158,17 +172,22 @@ export async function prepareBulkAction(db:Connection,family:string,member:{id:s
  const items=list.items.filter(i=>i.name&&i.amount&&Number(i.amount)>0).filter(i=>{const k=normalizeName(i.name);if(seen.has(k))return false;seen.add(k);return true;}).slice(0,40);
  if(!items.length)return {outcome:'admin_config',reply:'Vi una lista pero no pude leer importes claros. ¿Me la mandás de nuevo con una foto más nítida o por texto?'};
  let action:StoredAction;
+ const dec=(v:string)=>v.includes('.')?v:v+'.00';
  if(list.kind==='budget'){
-  action={type:'bulk_budget',from:cur,createMissing:false,items:items.map(i=>{const c=safePick(i.category||i.name);return {name:i.name,amount:i.amount!.includes('.')?i.amount!:i.amount+'.00',categoryId:c?.id??null,categoryName:c?.name??null};})};
+  // Lo que ya está configurado se muestra con su valor actual: nada se pisa en silencio.
+  const current=new Map((await effectiveBudgets(db,family,cur+'-01')).map(b=>[b.categoryId,b.amount]));
+  action={type:'bulk_budget',from:cur,createMissing:false,items:items.map(i=>{const c=safePick(i.category||i.name);return {name:i.name,amount:dec(i.amount!),categoryId:c?.id??null,categoryName:c?.name??null,current:c?current.get(c.id)??null:null};})};
  }else{
-  action={type:'bulk_fixed',startMonth:cur,items:items.map(i=>{const c=safePick(i.category||i.name);return {name:i.name,amount:i.amount!.includes('.')?i.amount!:i.amount+'.00',dueDay:i.dueDay,categoryId:c?.id??null,categoryName:c?.name??null};})};
+  const existing=new Set((await db.query('SELECT name FROM appgastos.fixed_expenses WHERE family_id=$1',[family])).rows.map((r:{name:string})=>normalizeName(r.name)));
+  action={type:'bulk_fixed',startMonth:cur,items:items.map(i=>{const c=safePick(i.category||i.name);return {name:i.name,amount:dec(i.amount!),dueDay:i.dueDay,categoryId:c?.id??null,categoryName:c?.name??null,exists:existing.has(normalizeName(i.name))};})};
  }
  return store(db,family,member.id,action,at,fam);
 }
 
 const missing=(a:StoredAction):'category'|'paymentMethod'|null=>a.type==='create_fixed'&&!a.categoryId?'category':a.type==='pay_fixed'&&!a.paymentMethod?'paymentMethod':null;
-const lineBudget=(i:BulkBudgetItem,fam:string)=>'• '+i.name+(i.categoryName&&normalizeName(i.categoryName)!==normalizeName(i.name)?' → «'+i.categoryName+'»':'')+' — '+money(i.amount,fam)+(i.categoryId?'':' ⚠️ no encontré esa categoría');
+const lineBudget=(i:BulkBudgetItem,fam:string)=>'• '+i.name+(i.categoryName&&normalizeName(i.categoryName)!==normalizeName(i.name)?' → «'+i.categoryName+'»':'')+' — '+money(i.amount,fam)+(i.categoryId?(i.current?(Number(i.current)===Number(i.amount)?' (sin cambios)':' (ya tenías '+money(i.current,fam)+')'):''):' ⚠️ no encontré esa categoría');
 const lineFixed=(i:BulkFixedItem,fam:string)=>{
+ if(i.exists)return '• '+i.name+' — '+money(i.amount,fam)+' ⚠️ ya existe: la dejo como está (para cambiarle el importe decime «cambiá '+i.name+' a $X»)';
  const problems=[!i.dueDay?'falta el día de vencimiento':'',!i.categoryId?'falta la categoría':''].filter(Boolean);
  return '• '+i.name+' — '+money(i.amount,fam)+(i.dueDay?', vence el '+i.dueDay:'')+(i.categoryName?' ('+i.categoryName+')':'')+(problems.length?' ⚠️ '+problems.join(' y ')+': la dejo afuera':'');
 };
@@ -181,12 +200,12 @@ export function describe(a:StoredAction,fam:string):string{
   case 'create_fixed':return 'agregar el gasto fijo «'+a.name+'» de '+money(a.amount,fam)+', vence el día '+a.dueDay+(a.categoryName?', categoría «'+a.categoryName+'»':'');
   case 'set_fixed_amount':return 'cambiar el importe de «'+a.fixedName+'» a '+money(a.amount,fam)+' desde '+monthLabel(a.from)+' (lo ya pagado y los meses anteriores no cambian)';
   case 'set_fixed_active':return (a.active?'reactivar':'desactivar')+' el gasto fijo «'+a.fixedName+'»'+(a.active?'':' (deja de generar obligaciones nuevas; las pagadas se conservan)');
-  case 'pay_fixed':return 'registrar el pago de «'+a.fixedName+'» de '+monthLabel(a.period)+' por '+money(a.amount,fam)+(a.paymentMethod?' con '+PAYMENT_NAMES[a.paymentMethod]:'')+'. Se registra UN solo gasto de la casa y la obligación queda pagada';
+  case 'pay_fixed':return 'registrar el pago de «'+a.fixedName+'» de '+monthLabel(a.period)+' por '+money(a.amount,fam)+(a.paymentMethod?' con '+PAYMENT_NAMES[a.paymentMethod]:'')+(a.date?', pagado el '+dmy(a.date):'')+'. Se registra UN solo gasto de la casa y la obligación queda pagada';
   case 'bulk_budget':return 'fijar estos presupuestos mensuales desde '+monthLabel(a.from)+':\n'+a.items.slice(0,15).map(i=>lineBudget(i,fam)).join('\n')+(a.items.length>15?'\n… y '+(a.items.length-15)+' más':'');
   case 'bulk_fixed':return 'agregar estos gastos fijos:\n'+a.items.slice(0,15).map(i=>lineFixed(i,fam)).join('\n')+(a.items.length>15?'\n… y '+(a.items.length-15)+' más':'');
  }
 }
-async function store(db:Connection,family:string,memberId:string,action:StoredAction,at:Date,fam:string,question?:string){
+async function store(db:Connection,family:string,memberId:string,action:StoredAction,at:Date,fam:string,question?:string,prefix?:string){
  const docCodes=new Set((await db.query("SELECT short_code FROM appgastos.documents WHERE family_id=$1 AND state IN ('received','processing','needs_review')",[family])).rows.map((r:{short_code:string})=>r.short_code));
  const summary=describe(action,fam);
  const replaced=(await db.query("UPDATE appgastos.admin_actions SET state='cancelled' WHERE family_id=$1 AND member_id=$2 AND state='pending' RETURNING id,action",[family,memberId])).rows as {action:StoredAction}[];
@@ -195,7 +214,7 @@ async function store(db:Connection,family:string,memberId:string,action:StoredAc
  let code=newCode();while(docCodes.has(code))code=newCode();
  for(let attempt=0;attempt<6;attempt++){
   const r=await db.query(`INSERT INTO appgastos.admin_actions(family_id,member_id,short_code,action,summary,expires_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id`,[family,memberId,code,JSON.stringify(action),summary,new Date(at.getTime()+TTL_MINUTES*60000)]);
-  if(r.rowCount)return {outcome:'admin_config' as const,reply:action.type==='collecting'?(question||'¿Me contás un poco más?')+'\n(Si te equivocaste, escribí *cancelar*.)':prompt(action,summary,code,replacedReady)};
+  if(r.rowCount)return {outcome:'admin_config' as const,reply:(prefix?prefix+'\n':'')+(action.type==='collecting'?(question||'¿Me contás un poco más?')+'\n(Si te equivocaste, escribí *cancelar*.)':prompt(action,summary,code,replacedReady&&!prefix))};
   code=newCode();
  }
  return {outcome:'admin_config' as const,reply:'No pude preparar la acción ahora. Probá de nuevo en un momento.'};
@@ -247,6 +266,16 @@ export async function adminCommand(pool:Pool,db:Connection,member:{id:string;rol
  };
  // "Crear" en una lista de presupuestos: también se crean las categorías que no existían.
  if(action.type==='bulk_budget'&&/^(?:crear|crealas|crearlas|si crealas|si crear|creala|crealo)$/.test(normalized))return update({...action,createMissing:true});
+ // Lista pendiente: sacar una línea o corregir su importe, vencimiento o categoría.
+ if(action.type==='bulk_budget'||action.type==='bulk_fixed'){
+  const cats=(await db.query('SELECT id,name,active FROM appgastos.categories WHERE family_id=$1',[family])).rows as Row[];
+  const edit=editBulk(action,text,cats);
+  if(edit&&'error' in edit)return say(edit.error);
+  if(edit){
+   if(!(edit.action as {items:unknown[]}).items.length){await db.query("UPDATE appgastos.admin_actions SET state='cancelled' WHERE id=$1",[pending.id]);return say('Saqué todas las líneas, así que no queda nada para aplicar.');}
+   const r=await update(edit.action);return say(edit.note+'\n'+r.reply);
+  }
+ }
  // Completar el dato que falta.
  if(need==='paymentMethod'&&cmd?.type==='payment'&&action.type==='pay_fixed')return update({...action,paymentMethod:cmd.value});
  if(need==='category'&&action.type==='create_fixed'&&!cmd){
@@ -291,7 +320,7 @@ async function execute(db:Connection,family:string,memberId:string,a:StoredActio
   case 'set_fixed_active':await fixedService(pool,family).update(a.fixedId,{active:a.active});return '«'+a.fixedName+'» quedó '+(a.active?'activo':'desactivado')+'.';
   case 'pay_fixed':{
    if(!a.paymentMethod)throw new ApiError(400,'Falta el medio de pago.');
-   await payOccurrence(pool,family,{role:'admin',memberId},a.occurrenceId,{paymentMethod:a.paymentMethod,amount:a.amount});
+   await payOccurrence(pool,family,{role:'admin',memberId},a.occurrenceId,{paymentMethod:a.paymentMethod,amount:a.amount,...(a.date?{date:a.date}:{})});
    return 'Registré el pago de «'+a.fixedName+'» de '+monthLabel(a.period)+' por '+money(a.amount,fam)+'. La obligación quedó pagada y no descuenta de tus presupuestos.';
   }
   case 'bulk_budget':{
@@ -318,5 +347,73 @@ async function execute(db:Connection,family:string,memberId:string,a:StoredActio
    return 'Listo, agregué '+applied+' gasto'+(applied===1?'':'s')+' fijo'+(applied===1?'':'s')+'. Quedan pendientes cada mes hasta que registres el pago.'+(skipped.length?' Dejé afuera (falta un dato o ya existían): '+skipped.join(', ')+'. Podés cargarlos por texto, por ejemplo «gasto fijo '+skipped[0]+' de $X, vence el día 10».':'');
   }
  }
+}
+// ---- Correcciones sobre un pedido que YA está listo para confirmar («no, son 120 mil», «mejor el 15», «fue ayer», «en Educación»).
+// Se vuelve a un pedido (intención) editable, se aplica lo nuevo y se vuelve a validar: el pedido original no se pierde ni cambia de tipo.
+export function actionToIntent(a:StoredAction):AdminIntent|null{
+ const base:AdminIntent={action:'none',name:null,parent:null,category:null,fixed:null,amount:null,amountText:null,monthText:null,dateText:null,dueDay:null,active:null,paymentMethod:null};
+ const amt=(v:string)=>({amount:String(Number(v)),amountText:String(Number(v))});
+ switch(a.type){
+  case 'create_category':return {...base,action:'create_category',name:a.name,parent:a.parentName};
+  case 'set_budget':return {...base,action:'set_budget',category:a.categoryName,monthText:a.from,...amt(a.amount)};
+  case 'set_budget_month':return {...base,action:'set_budget_month',category:a.categoryName,monthText:a.month,...amt(a.amount)};
+  case 'create_fixed':return {...base,action:'create_fixed',name:a.name,dueDay:a.dueDay,category:a.categoryName,...amt(a.amount)};
+  case 'set_fixed_amount':return {...base,action:'set_fixed_amount',fixed:a.fixedName,monthText:a.from,...amt(a.amount)};
+  case 'set_fixed_active':return {...base,action:'set_fixed_active',fixed:a.fixedName,active:a.active};
+  case 'pay_fixed':return {...base,action:'pay_fixed',fixed:a.fixedName,monthText:a.period,dateText:a.date??null,paymentMethod:a.paymentMethod,...amt(a.amount)};
+  default:return null;
+ }
+}
+const FILLER=/^(?:(?:no|ah no|perdon|perdona|disculpa|mejor|en realidad|corrijo|corregi|queria decir|digo|era|eran|son|es|fue|sera|seria|serian|de|por|a|en|con)[ ,]+)+/;
+// Respuesta corta que corrige un dato del pedido listo. null = no parece una corrección simple (se prueba con Gemini).
+export function correctionPatch(a:StoredAction,text:string,categories:Row[],today:string):Partial<AdminIntent>|null{
+ const t=normalizeName(text).replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim().replace(FILLER,'').trim();
+ if(!t||t.split(' ').length>5)return null;
+ const hasAmount=a.type==='create_fixed'||a.type==='set_budget'||a.type==='set_budget_month'||a.type==='set_fixed_amount'||a.type==='pay_fixed';
+ if(a.type==='pay_fixed'&&parsePaymentDate(t,today)&&!/^\d{3,}/.test(t))return {dateText:t};
+ if(a.type==='create_fixed'){
+  const day=/^(?:vence |vencen |el |dia |los )*(3[01]|[12]\d|[1-9])$/.exec(t);
+  if(day)return {dueDay:Number(day[1])};
+ }
+ if(hasAmount){const n=normalizeTextAmount(t);if(n)return {amount:n,amountText:t};}
+ if(a.type==='create_fixed'||a.type==='set_budget'||a.type==='set_budget_month'){
+  try{const c=pick(categories,t.replace(/^(?:categoria |la categoria |el |la )+/,'').trim(),'categorías');if(c)return {category:c.name};}catch{/* ambigua: lo resuelve Gemini */}
+ }
+ return null;
+}
+
+// ---- Edición de una lista pendiente (fotos de presupuestos o gastos fijos): excluir una línea, cambiar su importe, su vencimiento o su categoría.
+const dropWord=/^(?:sacar|saca|saca la|quitar|quita|excluir|excluí|excluye|elimina|eliminar|borra|borrar|sin|no incluyas|no pongas)\s+(?:el |la |los |las )?(.+)$/;
+export function editBulk(a:StoredAction,text:string,categories:Row[]):{action:StoredAction;note:string}|{error:string}|null{
+ if(a.type!=='bulk_budget'&&a.type!=='bulk_fixed')return null;
+ const t=normalizeName(text).replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
+ const items=a.items as (BulkBudgetItem&BulkFixedItem)[];
+ const find=(ref:string)=>{
+  const r=normalizeName(ref);
+  const exact=items.filter(i=>normalizeName(i.name)===r);if(exact.length===1)return exact[0];
+  const part=items.filter(i=>normalizeName(i.name).includes(r)||r.includes(normalizeName(i.name)));
+  return part.length===1?part[0]:part.length>1?'ambiguous' as const:null;
+ };
+ const drop=dropWord.exec(t);
+ if(drop){
+  const hit=find(drop[1]);
+  if(hit==='ambiguous')return {error:'«'+drop[1]+'» puede ser más de una línea. ¿Cuál querés sacar?'};
+  if(!hit)return {error:'No encontré «'+drop[1]+'» en la lista. Las líneas son: '+items.map(i=>i.name).join(', ')+'.'};
+  return {action:{...a,items:items.filter(i=>i!==hit)} as StoredAction,note:'Saqué «'+hit.name+'».'};
+ }
+ // «<línea> <importe>», «cambiá <línea> a <importe>», «<línea> vence el 10», «<línea> en <categoría>»: se busca el nombre de la línea al principio.
+ const body=t.replace(/^(?:cambia|cambiar|pone|poner|corregi|corregir|mejor|ahora)\s+(?:el |la |los |las )?/,'');
+ const hit=[...items].sort((x,y)=>y.name.length-x.name.length).find(i=>body===normalizeName(i.name)||body.startsWith(normalizeName(i.name)+' '));
+ if(!hit)return null;
+ const rest=body.slice(normalizeName(hit.name).length).trim().replace(/^(?:a|en|son|es|de|:)\s+/,'');
+ const day=a.type==='bulk_fixed'?/^(?:vence |vencen )(?:el |los )?(3[01]|[12]\d|[1-9])$/.exec(rest):null;
+ if(day)return {action:{...a,items:items.map(i=>i===hit?{...i,dueDay:Number(day[1])}:i)} as StoredAction,note:'Listo, «'+hit.name+'» vence el '+day[1]+'.'};
+ const n=normalizeTextAmount(rest);
+ if(n)return {action:{...a,items:items.map(i=>i===hit?{...i,amount:n.includes('.')?n:n+'.00',current:i.current}:i)} as StoredAction,note:'Listo, «'+hit.name+'» queda en '+rest+'.'};
+ try{
+  const c=pick(categories,rest.replace(/^(?:categoria |la categoria )/,''),'categorías');
+  if(c)return {action:{...a,items:items.map(i=>i===hit?{...i,categoryId:c.id,categoryName:c.name}:i)} as StoredAction,note:'Listo, «'+hit.name+'» va en «'+c.name+'».'};
+ }catch{return {error:'No me quedó claro a qué categoría te referís para «'+hit.name+'».'};}
+ return null;
 }
 export const ADMIN_PAYMENT_CODES=PAYMENT_CODES;

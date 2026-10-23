@@ -37,6 +37,15 @@ Consultas deterministas: «¿Cuánto tengo pendiente de gastos fijos?», «¿Cu�
 - «Cancelar», «olvidalo» o «no» descartan el pedido. Un pedido distinto reemplaza al anterior y no hereda sus datos. Si el mensaje parece un gasto («gasté 10 en…») durante una pregunta, no se toma como respuesta.
 - **Foto de una lista** (presupuestos por categoría o gastos fijos, escrita a mano o impresa): Gemini la lee, el bot arma **una sola acción** con todas las líneas, hace coincidir los nombres con tus categorías («Super» → «Supermercado»), marca lo que no entendió y pide un solo «confirmar». Para presupuestos, «crear» también crea las categorías que no existen. Un gasto fijo sin día de vencimiento o sin categoría queda afuera y se avisa (se carga después por texto). Un integrante que manda la foto recibe «solo los administradores pueden configurarlo». No se guarda la imagen.
 
+### Correcciones, cambios de tema y reintentos
+- **Corregir antes de confirmar:** con el pedido ya listo, una respuesta corta lo corrige sin cambiar de pedido ni empezar de nuevo: «no, son 120 mil», «mejor el 15», «en Educación», «fue ayer» (en un pago). Las correcciones largas las interpreta Gemini y solo se aceptan si son del mismo tipo de pedido.
+- **Fecha del pago:** «lo pagué ayer / el 8 / 8/10» queda como fecha efectiva (nunca futura). Si no se entiende, el bot pregunta.
+- **Cambiar de tema:** un pedido de configuración claro reemplaza al que estaba a medias (sin heredar sus datos). Una frase ajena no pierde el borrador: el bot repite la pregunta. Con un gasto en curso (Fase 1), «efectivo», «sí» o «el 10» siguen siendo de ese gasto, pero un pedido de configuración claro igual se atiende.
+- **Si Gemini no responde** y el pedido es claramente de configuración, el bot pide reintentar: nunca lo trata como un gasto.
+- **Listas pendientes:** la propuesta muestra lo que ya existe («ya tenías $100.000», «ya existe»); se puede sacar una línea («sacá ocio») o corregirla («ropa 250 mil», «colegio vence el 10», «colegio en Educación») antes del «confirmar».
+- **Intención escrita con el archivo:** «Estos son mis presupuestos», «son gastos fijos», «pagué el colegio», «es una factura»… junto a una imagen o PDF pesa más que la clasificación del modelo (se guarda solo una etiqueta cerrada, no el texto). Si el archivo es ambiguo, el bot ofrece también *presupuestos* y *gastos fijos*, y se responde con una palabra.
+- **Reintentos de WhatsApp y reinicios:** el mismo mensaje repetido no aplica dos veces y los pedidos pendientes viven en la base, así que un reinicio del servidor no los pierde.
+
 ## Comprobantes (Fase 2)
 Un comprobante de pago que coincide en importe exacto y nombre con **una** obligación pendiente del mes (o del anterior) se propone **saldar** (solo para administradores): al confirmar se registra un solo gasto de la casa y se vincula. Si la obligación ya figura pagada → no se crea otro gasto. Una factura sin evidencia de pago sigue pendiente. Nunca se registra solo (siempre pide confirmar).
 
@@ -45,7 +54,7 @@ Un comprobante de pago que coincide en importe exacto y nombre con **una** oblig
 
 ## Guía de despliegue (requiere autorización)
 1. Respaldo de la base y aviso al compañero.
-2. Aplicar la migración (`npx tsx scripts/migrate.ts`). Ya hay una migración previa de la Fase 2 (`20261022120000_documents.sql`): si ya está aplicada, solo corre la nueva.
+2. Aplicar la migración (`npx tsx scripts/migrate.ts`). Corre solo las pendientes. Para la conversación del administrador hay una más, chica y aditiva: `20261024120000_document_hint.sql` (columna `documents.intent_hint`, una etiqueta cerrada).
 3. Desplegar `main`. No hay variables nuevas.
 4. Verificar: Presupuestos → «Guardar» crea el presupuesto base y aparece en los meses siguientes; Gastos fijos → resumen separado; por WhatsApp (como administrador) probar «Poné $X mensuales de presupuesto para <categoría>» y confirmar.
 5. Rollback: redeploy del commit anterior; las tablas nuevas pueden quedar sin uso.

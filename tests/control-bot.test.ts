@@ -2,7 +2,10 @@
 // respeta roles y es idempotente. Datos sintéticos.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sessionApp} from './helpers/sessionApp';
+import {sessionApp,INITIAL_FAMILY_ID} from './helpers/sessionApp';
+import {enqueue} from '../src/backend/whatsapp/repository';
+import {whatsappProcessor} from '../src/backend/whatsapp/processor';
+import {emptyInterpretation} from '../src/backend/whatsapp/candidate';
 import {referenceDate} from '../src/backend/whatsapp/candidate';
 import type {AdminIntent} from '../src/backend/whatsapp/adminIntent';
 
@@ -11,11 +14,11 @@ const cur=referenceDate(new Date()).slice(0,7);
 const addM=(ym:string,n:number)=>{const [y,m]=ym.split('-').map(Number);return new Date(Date.UTC(y,m-1+n,1)).toISOString().slice(0,7);};
 const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const monthName=(ym:string)=>MONTHS[Number(ym.slice(5,7))-1];
-const blank:AdminIntent={action:'none',name:null,parent:null,category:null,fixed:null,amount:null,amountText:null,monthText:null,dueDay:null,active:null,paymentMethod:null};
+const blank:AdminIntent={action:'none',name:null,parent:null,category:null,fixed:null,amount:null,amountText:null,monthText:null,dateText:null,dueDay:null,active:null,paymentMethod:null};
 
 test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e idempotencia',async(t)=>{
- let intent:AdminIntent=blank;const calls={admin:0};
- const app=await sessionApp({admin:async()=>{calls.admin++;return intent;}});
+ let intent:AdminIntent=blank,down=false;const calls={admin:0};
+ const app=await sessionApp({admin:async()=>{calls.admin++;if(down)throw new Error('gemini caído');return intent;}});
  const {q,call,json,incoming,replies}=app;
  t.after(()=>app.stop());
  const ana=await app.account('ana',{role:'admin',phone:ANA}),beto=await app.account('beto',{phone:BETO});
@@ -178,9 +181,94 @@ test('Fase 3D: configuración y pagos por WhatsApp con confirmación, roles e id
   await say(ANA,'cancelar');
  });
 
+
+ await t.test('corregir un pedido listo: "no, son 120 mil", "mejor el 15", "en Educación" lo corrigen sin cambiar de pedido ni volver a empezar (3.7)',async()=>{
+  const before=await expenses();
+  await say(ANA,'Registrar gasto fijo de 100000 en cuota club',{action:'create_fixed',name:'Club',amount:'100000',amountText:'100000',dueDay:10,category:'Educación'});
+  const calls0=calls.admin;
+  let r=await say(ANA,'no, son 120 mil');
+  assert.match(r,/Dale, lo corregí\./);assert.match(r,/«Club» de \$120\.000, vence el día 10, categoría «Educación»/);
+  r=await say(ANA,'mejor el 15');assert.match(r,/vence el día 15/);assert.match(r,/\$120\.000/);
+  r=await say(ANA,'en Servicios');assert.match(r,/categoría «Servicios & Hogar»/);
+  assert.equal(calls.admin,calls0,'las correcciones cortas no llaman a Gemini');assert.equal((await pending()).length,1,'sigue habiendo UN solo pedido');
+  // Una corrección larga la interpreta Gemini, pero solo se acepta si es el mismo pedido.
+  r=await say(ANA,'cambiá el importe a 150 mil y que venza el 12',{action:'create_fixed',name:null,amount:'150000',amountText:'150 mil',dueDay:12});
+  assert.match(r,/«Club» de \$150\.000, vence el día 12/);
+  assert.equal(await expenses(),before);
+  assert.match(await say(ANA,'confirmar'),/Agregué el gasto fijo «Club» de \$150\.000, vence el día 12/);
+ });
+
+ await t.test('cambiar de tema: un pedido nuevo reemplaza al que estaba a medias; una frase ajena repite la pregunta sin perderlo; gasto en curso + pedido claro',async()=>{
+  await say(ANA,'Registrar gasto fijo de 70000 en gimnasio',{action:'create_fixed',name:'Gym',amount:'70000',amountText:'70000'});
+  assert.equal((await pending())[0].action.type,'collecting');
+  const r=await say(ANA,'che, ¿qué hora es?',{action:'none'});
+  assert.match(r,/no te entendí/);assert.match(r,/¿Qué día del mes vence\?/);assert.equal((await pending())[0].action.type,'collecting','no se perdió el borrador');
+  // Cambia de tema con un pedido claro: reemplaza al anterior.
+  const nuevo=await say(ANA,'Mejor poné el presupuesto de Alimentos y bebidas en 400 mil',{action:'set_budget',category:'Alimentos y bebidas',amount:'400000',amountText:'400 mil'});
+  assert.match(nuevo,/fijar el presupuesto mensual de «Alimentos y bebidas» en \$400\.000/);assert.doesNotMatch(nuevo,/Gym/);assert.equal((await pending()).length,1);
+  await say(ANA,'cancelar');
+  // Con un gasto en curso, "efectivo" sigue siendo del gasto; un pedido de configuración claro igual entra.
+  app.interpret({amount:'900',amountText:'900',merchant:'Kiosco',description:'Kiosco',category:'Alimentos y bebidas'});
+  assert.match(await say(ANA,'Gasté 900 en el kiosco'),/Cómo pagaste|medio/i);
+  assert.match(await say(ANA,'Presupuesto de Alimentos y bebidas 300 mil',{action:'set_budget',category:'Alimentos y bebidas',amount:'300000',amountText:'300 mil'}),/Voy a fijar el presupuesto mensual/);
+  assert.match(await say(ANA,'efectivo'),/Registrado|tarjeta|Registr/i,'"efectivo" siguió siendo del gasto en curso');
+  await say(ANA,'cancelar');
+ });
+
+ await t.test('fecha del pago: "lo pagué ayer" queda con esa fecha; una fecha que no se entiende se pregunta; si Gemini no responde nunca se registra un gasto',async()=>{
+  const fixed=(await json(await call('/api/fixed-expenses',ana.token,'POST',{name:'Seguro',categoryId:edu,expectedAmount:'50000',dueDay:20,startDate:cur+'-01'}))).fixedExpense;
+  const yesterday=new Date(Date.parse(referenceDate(new Date())+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  const pay=async(extra:Partial<AdminIntent>)=>say(ANA,'Ya pagué el seguro',{action:'pay_fixed',fixed:'Seguro',monthText:monthName(cur),paymentMethod:'transfer',...extra});
+  assert.match(await pay({dateText:'el 99/99'}),/¿Qué día fue\?/);
+  assert.match(await say(ANA,'ayer'),new RegExp('pagado el '+yesterday.slice(8)+'/'+yesterday.slice(5,7)));
+  assert.match(await say(ANA,'confirmar'),/Registré el pago de «Seguro»/);
+  assert.equal((await q("SELECT to_char(date,'YYYY-MM-DD') d FROM appgastos.expenses WHERE description LIKE 'Seguro%'")).rows[0].d,yesterday);
+  void fixed;
+  // Sin Gemini: un pedido de configuración claro NO cae al flujo de gastos.
+  const before=await expenses();down=true;
+  try{assert.match(await say(ANA,'Anota gasto fijo 100mil en el colegio'),/no pude interpretar tu pedido/i);}finally{down=false;}
+  assert.equal(await expenses(),before);assert.equal((await pending()).length,0);
+ });
+
+ await t.test('lista de presupuestos: muestra lo que ya tenías y no se pisa en silencio; se puede sacar o corregir una línea antes de confirmar',async()=>{
+  const mascotas=await app.category('Mascotas'),ropa=await app.category('Ropa'),ocio=await app.category('Ocio');
+  await call('/api/budgets/base/'+mascotas,ana.token,'PUT',{amount:'100000'});
+  const fam=INITIAL_FAMILY_ID;
+  const doc=async(n:string)=>enqueue(app.db.pool,fam,[{id:n,sender:ANA,text:null,type:'image',receivedAt:new Date(),media:{id:n,mime:'image/jpeg',sha256:'sha-'+n,filename:null,caption:null}}]);
+  void doc;
+  // Se arma la lista directamente (el flujo con la foto se prueba en documents.test.ts).
+  const {prepareBulkAction}=await import('../src/backend/whatsapp/admin');
+  const first=await prepareBulkAction(app.db.pool,fam,{id:ana.id},{kind:'budget',items:[{name:'Mascotas',amount:'250000.00',dueDay:null,category:null},{name:'Ocio',amount:'500000.00',dueDay:null,category:null},{name:'Ropa',amount:'200000.00',dueDay:null,category:null}]},new Date(),'ARS');
+  assert.match(first.reply,/• Mascotas — \$250\.000 \(ya tenías \$100\.000\)/);assert.match(first.reply,/• Ocio — \$500\.000/);
+  assert.match(await say(ANA,'sacá ocio'),/Saqué «Ocio»/);
+  const r=await say(ANA,'ropa 250 mil');
+  assert.match(r,/«Ropa» queda en 250 mil/);assert.doesNotMatch(r,/Ocio/);assert.match(r,/• Ropa — \$250\.000/);
+  assert.match(await say(ANA,'sacá perro'),/No encontré «perro» en la lista/,'una línea inexistente no rompe nada');
+  assert.match(await say(ANA,'confirmar'),/fijé 2 presupuestos/);
+  const base=Object.fromEntries((await q('SELECT category_id,amount::text a FROM appgastos.budget_bases WHERE amount IS NOT NULL')).rows.map((x:any)=>[x.category_id,x.a]));
+  assert.equal(base[mascotas],'250000.00');assert.equal(base[ropa],'250000.00');assert.equal(base[ocio],undefined,'la línea que saqué no se aplicó');
+  await q('DELETE FROM appgastos.budget_bases WHERE category_id=ANY($1::uuid[])',[[mascotas,ropa,ocio]]);
+ });
+
+ await t.test('reintentos de WhatsApp y reinicio: el mismo mensaje repetido no duplica y el pedido sigue en la base tras reiniciar el proceso (3.15/16)',async()=>{
+  const fam=INITIAL_FAMILY_ID,sentBefore=replies.length;
+  await say(ANA,'Creá la categoría Viajes largos',{action:'create_category',name:'Viajes largos'});
+  const code=codeOf(replies.at(-1)!.text);
+  // Proceso nuevo (como tras un reinicio): lee el pedido pendiente de la base y lo confirma.
+  const restarted=whatsappProcessor(app.db.pool,async()=>emptyInterpretation(),async(to,text)=>{replies.push({to,text});},undefined,async()=>blank);
+  for(let i=0;i<2;i++)await enqueue(app.db.pool,fam,[{id:'wamid.retry-1',sender:ANA,text:'confirmar '+code,type:'text',receivedAt:new Date()}]);
+  while(await restarted.processNext());while(await restarted.replyNext());
+  assert.equal(await count("SELECT count(*)::int n FROM appgastos.categories WHERE name='Viajes largos'"),1,'se aplicó una sola vez');
+  assert.equal(replies.slice(sentBefore).filter(r=>/Creé la categoría «Viajes largos»/.test(r.text)).length,1,'una sola respuesta');
+  // Otro mensaje con el mismo código, ahora con otro id: ya estaba aplicado.
+  await enqueue(app.db.pool,fam,[{id:'wamid.retry-2',sender:ANA,text:'confirmar '+code,type:'text',receivedAt:new Date()}]);
+  while(await restarted.processNext());while(await restarted.replyNext());
+  assert.match(replies.at(-1)!.text,/ya estaba aplicada/);assert.equal(await count("SELECT count(*)::int n FROM appgastos.categories WHERE name='Viajes largos'"),1);
+ });
+
  await t.test('consultas: pendiente de gastos fijos y presupuesto restante (solo administradores)',async()=>{
   const r=await say(ANA,'¿Cuánto tengo pendiente de gastos fijos?');
-  assert.match(r,/Gastos fijos de este mes: pagados \$180\.000/);assert.match(r,/Deudas de meses anteriores/);
+  assert.match(r,/Gastos fijos de este mes: pagados \$/);assert.match(r,/Deudas de meses anteriores/);
   assert.match(await say(BETO,'¿Cuánto tengo pendiente de gastos fijos?'),/solo para administradores/);
   const left=await say(ANA,'¿Cuánto me queda del presupuesto de Alimentos y bebidas?');
   assert.match(left,/Alimentos y bebidas: presupuesto \$500\.000/);

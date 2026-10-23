@@ -4,7 +4,7 @@ import type {DocumentKind,DraftItem,ReceiptDraft} from './types';
 // Comandos de texto sobre un comprobante pendiente. Se reconocen por reglas (no por Gemini): son determinísticos y corregir un
 // borrador no vuelve a llamar al modelo. Un mensaje que no encaja en ninguna forma NO es un comando y sigue su camino normal.
 export type Command=
- |{type:'undo'}|{type:'unsettle'}|{type:'confirm';code?:string}|{type:'cancel';code?:string}|{type:'scope';value:'personal'|'household'}
+ |{type:'undo'}|{type:'unsettle'}|{type:'configList';kind:'budget'|'fixed'}|{type:'confirm';code?:string}|{type:'cancel';code?:string}|{type:'scope';value:'personal'|'household'}
  |{type:'date';raw:string}|{type:'total';raw:string}|{type:'payment';value:PaymentCode}|{type:'noExpense'}|{type:'expense'}|{type:'link'}|{type:'unlink'}
  |{type:'kind';value:DocumentKind}|{type:'exclude';item:string}|{type:'itemCategory';item:string;category:string};
 const clean=(text:string)=>normalizeName(text).replace(/[.,;:!¡?¿"'«»]/g,' ').replace(/\s+/g,' ').trim();
@@ -23,6 +23,8 @@ export function parseCommand(text:string):Command|null{
  if((m=/^(?:la )?fecha(?: es| fue)?:? (.+)$/.exec(raw)))return {type:'date',raw:m[1]};
  if((m=/^(?:el )?total(?: es| fue)?:? (.+)$/.exec(raw)))return {type:'total',raw:m[1]};
  if(/^no es (?:un )?gasto$|^es una transferencia propia$/.test(t))return {type:'noExpense'};
+ if(/^(?:es |son |esta es |estos son |esto es |era |eran )?(?:una |un |mi |mis |la |el |las |los )?(?:lista de |listado de )?presupuestos?(?: mensuales?)?$/.test(t))return {type:'configList',kind:'budget'};
+ if(/^(?:es |son |esta es |estos son |esto es |era |eran )?(?:una |un |mi |mis |la |el |las |los )?(?:lista de |listado de )?gastos fijos?$/.test(t))return {type:'configList',kind:'fixed'};
  if(/^(?:no saldar|no es (?:el )?gasto fijo|no es del gasto fijo|no es una obligacion)$/.test(t))return {type:'unsettle'};
  if(/^(?:no vincular|crear nuevo|nuevo gasto|es un gasto nuevo)$/.test(t))return {type:'unlink'};
  if(/^(?:vincular|vinculalo|asociar|asocialo|es el mismo|ya lo cargue|ya esta cargado|ya lo tengo cargado)$/.test(t))return {type:'link'};

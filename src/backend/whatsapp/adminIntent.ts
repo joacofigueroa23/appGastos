@@ -13,6 +13,7 @@ export interface AdminIntent {
  fixed:string|null;      // gasto fijo existente al que se refiere
  amount:string|null;amountText:string|null;
  monthText:string|null;  // fragmento literal ("diciembre", "noviembre 2026", "este mes")
+ dateText:string|null;   // fecha literal del pago ("ayer", "el 8", "8/10"); la resuelve el backend
  dueDay:number|null;active:boolean|null;paymentMethod:PaymentCode|null;
 }
 // pending: el pedido que quedó a medias y lo que se le preguntó al administrador (asking); el mensaje nuevo lo completa o lo corrige.
@@ -28,7 +29,7 @@ export function parseAdminIntent(raw:unknown):AdminIntent{
  const day=typeof o.dueDay==='number'&&Number.isInteger(o.dueDay)&&o.dueDay>=1&&o.dueDay<=31?o.dueDay:null;
  const method=typeof o.paymentMethod==='string'&&(PAYMENT_CODES as readonly string[]).includes(o.paymentMethod)?o.paymentMethod as PaymentCode:null;
  return {action:o.action as AdminActionName,name:str(o.name),parent:str(o.parent),category:str(o.category),fixed:str(o.fixed),amount:str(o.amount,30),amountText:str(o.amountText,60),
-  monthText:str(o.monthText,40),dueDay:day,active:typeof o.active==='boolean'?o.active:null,paymentMethod:method};
+  monthText:str(o.monthText,40),dateText:str(o.dateText,40),dueDay:day,active:typeof o.active==='boolean'?o.active:null,paymentMethod:method};
 }
 
 // Filtro barato antes de llamar a Gemini: solo frases que suenan a configuración o a pago de una obligación. Un gasto común ("gasté 5 mil
@@ -43,6 +44,11 @@ const TOPIC_FIRST=/^(?:el |mi |un |nuevo )?(?:presupuesto|gasto fijo|subcategori
 export function looksLikeAdminRequest(text:string|null):boolean{
  const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
  return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||STRONG_TOPIC.test(t)||PAID.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
+}
+// Pedido de configuración «fuerte»: verbo + tema, frase que arranca con el tema o «gasto fijo». Si Gemini no está disponible, un pedido así NO se trata como un gasto.
+export function isStrongConfig(text:string|null):boolean{
+ const t=normalizeName(text??'').replace(/[.,;:!?¡¿"']/g,' ').replace(/\s+/g,' ').trim();
+ return (CONFIG_WORDS.test(t)&&CONFIG_TOPIC.test(t))||TOPIC_FIRST.test(t)||/\bgastos? fijos?\b/.test(t)||/^desde \w+ (el|la) .+ cuesta\b/.test(t);
 }
 // Un integrante que pide cambiar la configuración recibe una negativa clara, sin gastar una llamada a Gemini ni tratarlo como un gasto.
 export function isConfigWrite(text:string|null):boolean{
@@ -87,7 +93,7 @@ action: create_category (crear una categoría o subcategoría nueva: name, y par
 set_budget_month (presupuesto distinto solo para UN mes: category, amount, monthText), create_fixed (crear un gasto fijo mensual nuevo: name, amount, dueDay, y category si la nombra),
 set_fixed_amount (cambiar el importe de un gasto fijo existente: fixed, amount, monthText si dice "desde <mes>"), set_fixed_active (activar o desactivar un gasto fijo: fixed, active),
 pay_fixed (el usuario avisa que YA PAGÓ una obligación fija: fixed, monthText del mes pagado si lo dice, amount si dice un importe distinto, paymentMethod si lo dice), none (cualquier otra cosa: un gasto común, una pregunta, etc.).
-amount es decimal canónico sin separador de miles ("$500.000" => "500000"); amountText es el fragmento literal que lo respalda ("500.000", "15 mil"). monthText es un fragmento literal ("diciembre", "noviembre", "este mes").
+amount es decimal canónico sin separador de miles ("$500.000" => "500000"); amountText es el fragmento literal que lo respalda ("500.000", "15 mil"). monthText es un fragmento literal ("diciembre", "noviembre", "este mes"). dateText es el fragmento literal de la fecha en que se hizo un pago ("ayer", "el 8", "8/10"), solo para pay_fixed y solo si la dice.
 Si hay pedidoPendiente, el mensaje responde a preguntaPendiente (o corrige el pedido): devolvé la MISMA action del pedido y SOLO los datos presentes en el mensaje nuevo (el resto null); si el mensaje es otro pedido distinto, devolvé su action y datos. Entendé frases coloquiales y abreviadas ("vence el 10", "son 100 lucas", "anotalo", "sumá", "poné", "cargá", "registrá") igual que las formales.
 category, parent y fixed deben elegirse entre los nombres del contexto (copiá el nombre exacto); si no hay uno claro, null. Mercado Pago, MP, QR y billetera son paymentMethod wallet.`;
 export function geminiAdminInterpreter(generate?:AdminGenerate):AdminInterpreter{
@@ -98,9 +104,9 @@ export function geminiAdminInterpreter(generate?:AdminGenerate):AdminInterpreter
   const models=(process.env.GEMINI_MODEL||'gemini-3.5-flash-lite,gemini-3.1-flash-lite').split(',').map(m=>m.trim()).filter(Boolean);
   const params:GenerateContentParameters={model:models[0],contents:JSON.stringify({message:ctx.text,hoy:ctx.referenceDate,categorias:ctx.categories,gastosFijos:ctx.fixed,...(ctx.pending?{pedidoPendiente:ctx.pending.intent,preguntaPendiente:ctx.pending.asking}:{})}),
    config:{systemInstruction:SYSTEM,responseMimeType:'application/json',temperature:0,responseSchema:{type:Type.OBJECT,properties:{
-    action:{type:Type.STRING,enum:[...ADMIN_ACTIONS]},name:s,parent:s,category:s,fixed:s,amount:s,amountText:s,monthText:s,dueDay:{type:Type.INTEGER,nullable:true},active:{type:Type.BOOLEAN,nullable:true},
+    action:{type:Type.STRING,enum:[...ADMIN_ACTIONS]},name:s,parent:s,category:s,fixed:s,amount:s,amountText:s,monthText:s,dateText:s,dueDay:{type:Type.INTEGER,nullable:true},active:{type:Type.BOOLEAN,nullable:true},
     paymentMethod:{...s,enum:[...PAYMENT_CODES]},
-   },required:['action','name','parent','category','fixed','amount','amountText','monthText','dueDay','active','paymentMethod']}}};
+   },required:['action','name','parent','category','fixed','amount','amountText','monthText','dateText','dueDay','active','paymentMethod']}}};
   let response:{text?:string}|undefined,failure='network';
   for(const model of models){
    try{response=generate?await generate({...params,model}):await ai!.models.generateContent({...params,model});break;}

@@ -54,7 +54,7 @@ export function statementSummary(d:StatementDraft,ctx:DraftContext,code:string):
  lines.push('Para evitar decenas de mensajes, revisalo y elegí qué importar en la web (Comprobantes). Por defecto no importo nada ('+open+' listos para revisar). Código: '+code);
  return lines.join('\n');
 }
-export const unknownSummary=(code:string)=>'No pude determinar qué tipo de documento es. Decime cuál es: *ticket*, *factura*, *comprobante de pago* o *resumen*. Todavía no registré nada. Código: '+code;
+export const unknownSummary=(code:string)=>'No pude determinar qué tipo de documento es. Decime cuál es: *ticket*, *factura*, *comprobante de pago*, *resumen*, *presupuestos* (lista de presupuestos) o *gastos fijos* (lista de gastos fijos). Todavía no registré nada. Código: '+code;
 export const CONFIRMED_REPLY=(text:string)=>'✅ '+text;
 export function confirmedExpenseReply(amount:string,currency:string,fam:string,categories:number,extra=''){
  return '✅ Registrado: '+money(amount,currency,fam)+(categories>1?' en '+categories+' categorías':'')+'.'+extra;

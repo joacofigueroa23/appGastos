@@ -13,6 +13,7 @@ import type {MediaFetcher} from './media';
 import type {DocumentExtractor} from './extraction';
 import {applyEdit,BLOCKED,canAutoRegister,buildInvoiceDraft,buildReceiptDraft,buildStatementDraft,classify,receiptProblems,type DraftContext,type Edit} from './draft';
 import {prepareBulkAction} from '../whatsapp/admin';
+import {applyHint,captionHint,HINT_LABEL,listFromExtraction,type IntentHint} from './hint';
 import {withFixedMatch,withReceiptDuplicates,withStatementDuplicates} from './duplicates';
 import {fromCents,includedItems,primaryCategory,toCents} from './reconcile';
 import {COMMAND_HELP,invoiceSummary,receiptSummary,statementSummary,unknownSummary} from './summary';
@@ -21,7 +22,7 @@ import type {DocumentKind,DocumentState,Draft,DraftLine,Extraction,InvoiceDraft,
 
 export interface DocRow {
  id:string;family_id:string;member_id:string;sender:string|null;short_code:string;source_message_id:string|null;media_id:string;media_mime:string;media_sha256:string|null;
- filename:string|null;household_hint:boolean;state:DocumentState;kind:DocumentKind|null;attempts:number;extraction:Extraction|null;draft:Draft|null;result:any;usage:any;
+ filename:string|null;household_hint:boolean;intent_hint:IntentHint|null;state:DocumentState;kind:DocumentKind|null;attempts:number;extraction:Extraction|null;draft:Draft|null;result:any;usage:any;
  error_code:string|null;created_at:Date;updated_at:Date;expires_at:Date;lease_token:string|null;
 }
 // Una acción del usuario que no se puede cumplir (falta un dato, borrador cambiado): se le explica; no es un error del sistema.
@@ -68,9 +69,9 @@ export async function receiveDocument(db:Connection,row:{message_id:string;famil
  const caption=media.caption||'';
  for(let attempt=0;attempt<6;attempt++){
   const code=newCode();
-  const inserted=await db.query(`INSERT INTO appgastos.documents(family_id,member_id,sender,short_code,source_message_id,media_id,media_mime,media_sha256,filename,household_hint,expires_at)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()+($11||' hours')::interval) ON CONFLICT DO NOTHING RETURNING short_code`,
-   [row.family_id,member.id,row.sender,code,row.message_id,media.id,media.mime.split(';')[0].trim().toLowerCase(),media.sha256,null,householdMarker(caption),String(limits.ttlHours)]);
+  const inserted=await db.query(`INSERT INTO appgastos.documents(family_id,member_id,sender,short_code,source_message_id,media_id,media_mime,media_sha256,filename,household_hint,intent_hint,expires_at)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+($12||' hours')::interval) ON CONFLICT DO NOTHING RETURNING short_code`,
+   [row.family_id,member.id,row.sender,code,row.message_id,media.id,media.mime.split(';')[0].trim().toLowerCase(),media.sha256,null,householdMarker(caption),captionHint(caption),String(limits.ttlHours)]);
   if(inserted.rowCount)return {outcome:'document_received',reply:'📎 Recibí tu comprobante (código '+code+'). Lo estoy leyendo y en un momento te cuento qué encontré. Todavía no registré nada.'};
   const concurrent=await already();
   if(concurrent)return repeat(concurrent);
@@ -110,17 +111,21 @@ export function documentProcessor(pool:Pool,deps:DocumentDeps){
    const {mime}=validateMedia(fetched.bytes,doc.media_mime);
    const ctx=await loadContext(pool,doc.family_id);
    const owner=(await pool.query('SELECT role FROM appgastos.family_members WHERE id=$1',[doc.member_id])).rows[0];
-   const {extraction,usage}=await deps.extract({bytes:fetched.bytes,mime,categories:ctx.categories.filter(c=>c.active).map(c=>c.name),today:ctx.today,familyCurrency:ctx.familyCurrency});
+   const {extraction:read,usage}=await deps.extract({bytes:fetched.bytes,mime,categories:ctx.categories.filter(c=>c.active).map(c=>c.name),today:ctx.today,familyCurrency:ctx.familyCurrency,hint:doc.intent_hint?HINT_LABEL[doc.intent_hint]:undefined});
+   // La intención explícita del usuario (el texto que acompañó al archivo) pesa más que la clasificación del modelo.
+   const {extraction,list}=applyHint(read,doc.intent_hint);
    await transaction(pool,async db=>{
     const viewer:Viewer={memberId:doc.member_id,role:owner.role};
     // Una lista de presupuestos o de gastos fijos no es un comprobante: se convierte en UNA acción de administración para confirmar.
-    if(extraction.configList.kind&&extraction.configList.items.length){
+    if(list){
+     const lines=listFromExtraction(extraction,list);
      const closed=await db.query("UPDATE appgastos.documents SET state='cancelled',kind='unknown',extraction=NULL,draft=NULL,usage=$3,result=$4,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_token=$2 AND state='processing'",
-      [doc.id,doc.lease_token,JSON.stringify(usage),JSON.stringify({handedTo:'admin_action',kind:extraction.configList.kind})]);
+      [doc.id,doc.lease_token,JSON.stringify(usage),JSON.stringify({handedTo:'admin_action',kind:list})]);
      if(!closed.rowCount)return;
      const reply=owner.role==='admin'
-      ?(await prepareBulkAction(db,doc.family_id,{id:doc.member_id},{kind:extraction.configList.kind,items:extraction.configList.items},new Date(),ctx.familyCurrency)).reply
-      :'Eso parece una lista de '+(extraction.configList.kind==='budget'?'presupuestos':'gastos fijos')+'. Solo los administradores pueden configurarlos, así que no hice ningún cambio.';
+      ?lines.length?(await prepareBulkAction(db,doc.family_id,{id:doc.member_id},{kind:list,items:lines},new Date(),ctx.familyCurrency)).reply
+       :'Me dijiste que es '+(list==='budget'?'una lista de presupuestos':'una lista de gastos fijos')+' pero no pude leer las líneas con sus importes. ¿Me la mandás con una foto más nítida o por texto?'
+      :'Eso parece una lista de '+(list==='budget'?'presupuestos':'gastos fijos')+'. Solo los administradores pueden configurarlos, así que no hice ningún cambio.';
      await enqueueReply(db,doc,'summary','document_ready',reply);
      return;
     }
@@ -393,6 +398,16 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
     return say(await confirmDocument(pool,db,doc,{memberId:member.id,role:member.role}));
    case 'cancel':return say(await cancelDocument(db,doc));
    case 'kind':return say((await changeKind(db,doc,cmd.value,member.role)).reply);
+   case 'configList':{
+    // «Es una lista de presupuestos / de gastos fijos»: con lo que ya se leyó, sin volver a llamar al modelo. Solo administradores.
+    if(member.role!=='admin'){await cancelDocument(db,doc);return say('Eso es configuración y solo los administradores pueden cargarla. Descarté el archivo, no hice ningún cambio.');}
+    if(!doc.extraction)return say('Ya no tengo lo que leí de ese archivo. Mandalo de nuevo.');
+    const lines=listFromExtraction(doc.extraction,cmd.kind);
+    if(!lines.length)return say('No pude leer líneas con importes en ese archivo. ¿Me lo mandás más nítido o por texto?');
+    const prepared=await prepareBulkAction(db,family,{id:member.id},{kind:cmd.kind,items:lines},new Date(),ctx.familyCurrency);
+    await finish(db,doc,'cancelled',null,{handedTo:'admin_action',kind:cmd.kind});
+    return say(prepared.reply);
+   }
   }
   const d=doc.draft;
   if(!d||d.kind==='pending_invoice')return say(show(d)+'\nEse comprobante no se corrige por acá.');
