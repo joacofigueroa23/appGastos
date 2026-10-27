@@ -13,13 +13,13 @@ export function BudgetsView(){
  const [month,setMonth]=useState(todayDateOnly().slice(0,7)),[report,setReport]=useState<BudgetReport|null>(null);
  const [drafts,setDrafts]=useState<Record<string,string>>({}),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null);
  const load=useCallback(async()=>{
-  try{const r=await financeApi.budgets(month);setReport(r);setDrafts(Object.fromEntries(r.budgets.map(b=>[b.categoryId,b.amount])));setError(null);}
+  try{const r=await financeApi.budgets(month);setReport(r);setError(null);}
   catch(e){setError(e instanceof Error?e.message:'No se pudieron cargar los presupuestos.');}
  },[month]);
  useEffect(()=>{void load();},[load,expensesStamp(apiExpenses)]);
  async function run(action:()=>Promise<unknown>,ok:string){
   if(busy)return;setBusy(true);setError(null);setMessage(null);
-  try{await action();await load();setMessage(ok);}catch(e){setError(e instanceof Error?e.message:'No se pudo guardar.');}finally{setBusy(false);}
+  try{await action();setDrafts({});await load();setMessage(ok);}catch(e){setError(e instanceof Error?e.message:'No se pudo guardar.');}finally{setBusy(false);}
  }
  const money=(v:string)=>formatCurrency(Number(v),'ARS'),t=report?.totals;
  const input='h-9 w-32 rounded-lg border border-slate-200 bg-white px-2 text-sm text-right';
@@ -40,7 +40,7 @@ export function BudgetsView(){
   </section>}
   <section aria-label="Presupuesto por categoría" className="bg-white p-4 sm:p-6 rounded-3xl space-y-3">
    {sortedCategories(categories).filter(c=>c.active||report?.budgets.some(b=>b.categoryId===c.id)).map(c=>{
-    const b=report?.budgets.find(x=>x.categoryId===c.id),draft=drafts[c.id]??'',sub=!!c.parentId;
+    const b=report?.budgets.find(x=>x.categoryId===c.id),draft=drafts[c.id]??b?.amount??'',sub=!!c.parentId;
     return <div key={c.id} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_8rem_8rem_5rem] items-center gap-3 text-sm">
      <span className={'truncate '+(sub?'pl-5 text-slate-700':'font-medium')}>{sub?'↳ ':''}{c.name}
       {b?.source==='exception'&&<span className="ml-2 text-xs text-amber-800">Excepción de este mes{b.baseAmount?' (base '+money(b.baseAmount)+')':''}</span>}

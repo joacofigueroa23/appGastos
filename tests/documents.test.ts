@@ -90,7 +90,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   const texts=replies.map(r=>r.text);
   assert.ok(texts.some(r=>/Recibí tu comprobante \(código [A-Z0-9]{4}\)/.test(r)&&/Todavía no registré nada/.test(r)));
   const summary=texts.find(r=>r.includes('Supermercado Demo'))!;
-  assert.match(summary,/Total \$20\.000 · gasto personal/);assert.match(summary,/Detergente — \$5\.000 → \(sin categoría\)/);assert.match(summary,/¿En qué categoría va «Detergente»\? Tus categorías:/);
+  assert.match(summary,/Total \$20\.000 · gasto personal/);assert.match(summary,/Categoría: Alimentos/);assert.match(summary,/2\) Detergente — \$5\.000\n/,'un ticket es una categoría: no se pregunta renglón por renglón');assert.match(summary,/¿Cómo pagaste\?/);
   assert.match(summary,/Todavía no registré nada/);assert.ok(summary.includes('Código: '+d.short_code));
   assert.equal(await expenses(),0);
   await send(CARLA,'simple',{type:'document',mime:'application/pdf'});
@@ -146,6 +146,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   await send(BETO,'ticket');
   const d0=await lastDoc(),extractCalls=calls.extract;
   assert.match(await say(BETO,'El detergente va en limpieza.'),/Detergente — \$5\.000 → Limpieza/);
+  assert.match(await say(BETO,'el shampoo va en higiene personal'),/Shampoo — \$3\.000 → Higiene personal/);
   assert.match(await say(BETO,'efectivo'),/Todavía no registré nada/);
   assert.match(await say(BETO,'de la casa'),/gasto de la casa/);
   assert.equal(await expenses(),0,'corregir no registra');assert.equal(calls.extract,extractCalls,'corregir no vuelve a llamar al modelo');
@@ -177,25 +178,30 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   await q('DELETE FROM appgastos.budgets');await clean();
  });
 
- await t.test('descuentos e impuestos: el total no se modifica; la diferencia es una partida visible que se clasifica (AC08)',async()=>{
+ await t.test('descuentos e impuestos: el total no se modifica y el ajuste va DENTRO del ticket, sin pedir categoría; separar renglones es opcional (AC08)',async()=>{
   await send(BETO,'discount');
   let d=await lastDoc();
   assert.equal(d.draft.total,'20000.00');assert.deepEqual(d.draft.items.map((i:any)=>[i.description,i.amount]),[['Arroz','12000.00'],['Lavandina','5000.00'],['Jabón','4000.00'],['Descuento: Promo','-1000.00']],'el IVA incluido no se suma de nuevo');
   assert.ok(!d.draft.items.some((i:any)=>/Impuesto/.test(i.description)));
   await say(BETO,'efectivo');
-  assert.match(replies.filter(r=>r.to===BETO).at(-1)!.text,/Hay un ajuste de -\$1\.000 \(descuento: promo\).*¿Lo sumo a «Alimentos»\? Respondé \*sí\*/s);assert.equal(await expenses(),0);
-  // Por la web: se asigna el ajuste a una categoría y se confirma.
-  const adj=d.draft.items.find((i:any)=>i.adjustment).id;
-  assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:[{type:'itemCategory',itemId:adj,categoryId:ali}]})).status,200);
-  assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:[{type:'itemCategory',itemId:adj,categoryId:'00000000-0000-4000-8000-0000000000aa'}]})).status,409);
+  const summary=replies.filter(r=>r.to===BETO).at(-1)!.text;
+  assert.match(summary,/Categoría: Alimentos/);assert.match(summary,/• Descuento: Promo — -\$1\.000 \(incluido en el total\)/);assert.doesNotMatch(summary,/¿En qué categoría|ajuste/);assert.equal(await expenses(),0);
+  // Por la web: las ediciones inválidas se rechazan y el ticket entra completo en UNA categoría.
+  assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:[{type:'ticketCategory',categoryId:'00000000-0000-4000-8000-0000000000aa'}]})).status,409);
   assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:[{type:'cosa',itemId:1}]})).status,409);
   assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:'no'})).status,200,'sin cambios válidos no hace nada');
-  const ok=await json(await api(beto.token,'POST','/'+d.id+'/confirm'));assert.match(ok.message,/Registrado/);
-  const e=(await q('SELECT amount::text a FROM appgastos.expenses')).rows;assert.deepEqual(e.map(r=>r.a),['20000.00']);
+  const ok=await json(await api(beto.token,'POST','/'+d.id+'/confirm'));assert.match(ok.message,/Registrado: Compra en Mayorista Demo por 20000 ARS en Alimentos/);
+  assert.deepEqual((await q('SELECT amount::text a,category_id FROM appgastos.expenses')).rows.map(r=>[r.a,r.category_id]),[['20000.00',ali]]);
+  assert.equal((await q('SELECT count(*)::int n FROM appgastos.expense_items')).rows[0].n,0,'una categoría: sin conceptos aparte');
+  d=await lastDoc();assert.equal(d.state,'confirmed');await clean();
+  // Separar renglones es opcional y explícito: el ajuste sigue a la categoría principal.
+  await send(BETO,'discount');d=await lastDoc();
+  assert.equal((await api(beto.token,'PATCH','/'+d.id,{edits:[{type:'itemCategory',itemId:2,categoryId:lim},{type:'itemCategory',itemId:3,categoryId:hig},{type:'paymentMethod',value:'cash'}]})).status,200);
+  assert.match((await json(await api(beto.token,'POST','/'+d.id+'/confirm'))).message,/repartido en 3 categorías/);
   assert.equal((await q('SELECT sum(amount)::text s FROM appgastos.expense_items')).rows[0].s,'20000.00');
   const byCat=(await q('SELECT category_id,sum(amount)::text s FROM appgastos.expense_lines GROUP BY 1 ORDER BY 1')).rows.reduce((m:any,r)=>({...m,[r.category_id]:r.s}),{});
-  assert.equal(byCat[ali],'11000.00','Arroz 12000 menos el descuento asignado a Alimentos');assert.equal(byCat[lim],'5000.00');assert.equal(byCat[hig],'4000.00');
-  d=await lastDoc();assert.equal(d.state,'confirmed');await clean();
+  assert.equal(byCat[ali],'11000.00','Arroz 12000 menos el descuento');assert.equal(byCat[lim],'5000.00');assert.equal(byCat[hig],'4000.00');
+  await clean();
  });
 
  await t.test('doble confirmación simultánea: un solo gasto (AC16)',async()=>{
@@ -304,8 +310,8 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
 
  await t.test('comprobante de pago sin coincidencia: se confirma como gasto nuevo con su autor y ámbito (AC18)',async()=>{
   await send(BETO,'receipt');const d=await lastDoc();
-  assert.match(await say(BETO,'confirmar'),/¿En qué categoría va «Colegio Demo»\?/);
-  assert.match(await say(BETO,'colegio demo en servicios'),/→ Servicios/);
+  assert.match(await say(BETO,'confirmar'),/¿En qué categoría va este pago\?/);
+  assert.match(await say(BETO,'colegio demo en servicios'),/Categoría: Servicios/);
   assert.match(await say(BETO,'de la casa'),/gasto de la casa/);
   assert.match(await say(BETO,'confirmar'),/Registrado/);
   const e=(await q('SELECT * FROM appgastos.expenses')).rows[0];
@@ -427,7 +433,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
    // Sin categoría que coincida: no registra, explica y ofrece las categorías.
    await send(BETO,'autocat');
    const ask=replies.filter(r=>r.to===BETO).at(-1)!.text;
-   assert.match(ask,/¿En qué categoría va «Bananas»\?/);assert.match(ask,/Alimentos/);assert.equal(await expenses(),1);
+   assert.match(ask,/¿En qué categoría va este ticket\?/);assert.match(ask,/Alimentos/);assert.equal(await expenses(),1);
    assert.match(await say(BETO,'bananas va en alimentos'),/Registrado: Compra en Tienda Demo por 9000 ARS en Alimentos/);assert.equal(await expenses(),2);
    // Deshacer borra lo último y deja el comprobante descartado.
    assert.match(await say(BETO,'deshacer'),/borré el gasto/);assert.equal(await expenses(),1);
@@ -537,7 +543,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
    await send(BETO,scenario);
    const d=await lastDoc(),adj=d.draft.items.find((i:any)=>i.adjustment);
    assert.deepEqual([adj.description,adj.amount,adj.auto],['Redondeo','-0.32',true],scenario);assert.ok(adj.categoryId,'toma la categoría principal');
-   assert.match(summaryOf(),/Redondeo — -\$0,32 → Combustible \(automático\)/);assert.doesNotMatch(summaryOf(),/importe_ilegible|Diferencia sin explicar|sin categoría|¿En qué/,scenario);
+   assert.match(summaryOf(),/Categoría: Combustible/);assert.match(summaryOf(),/Redondeo — -\$0,32 \(incluido en el total\)/);assert.doesNotMatch(summaryOf(),/importe_ilegible|Diferencia sin explicar|sin categoría|¿En qué/,scenario);
    assert.match(await say(BETO,'confirmar'),/Registrado: Compra en YPF por 19999\.68 ARS en Combustible/);
    const rows=await registered();assert.equal(rows.length,1);assert.equal(rows[0].a,'19999.68','el total declarado no se toca');
    assert.equal((await q('SELECT count(*)::int n FROM appgastos.expense_items')).rows[0].n,0,'una sola categoría: sin conceptos aparte');
@@ -545,22 +551,22 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
   }
   // El aviso técnico de lectura se dice en simple.
   await send(BETO,'fuel');assert.match(summaryOf(),/No pude leer el importe de/);assert.doesNotMatch(summaryOf(),/importe_ilegible/);await say(BETO,'cancelar');
-  // B) Una diferencia grande no se adivina: se pregunta con una sugerencia y alcanza con «sí».
+  // B) Renglones que no suman el total y nada lo explica: manda el TOTAL (entra completo en la categoría del ticket) y se avisa, sin preguntar.
   await send(BETO,'fuelbig');
-  assert.match(summaryOf(),/Hay un ajuste de \$1\.000 \(diferencia sin explicar\) entre los renglones y el total\. ¿Lo sumo a «Combustible»\? Respondé \*sí\* o decime otra categoría\./);
+  assert.match(summaryOf(),/Los renglones suman \$20\.000 y el total es \$21\.000: registro el total completo/);assert.doesNotMatch(summaryOf(),/¿Lo sumo|¿En qué/);
   assert.equal(await expenses(),0);
-  assert.match(await say(BETO,'sí'),/Registrado: Compra en YPF por 21000 ARS/);
+  assert.match(await say(BETO,'confirmar'),/Registrado: Compra en YPF por 21000 ARS en Combustible/);
   assert.equal((await registered())[0].a,'21000.00');await clean();
-  // …o se contesta con otra categoría, con una palabra.
+  // …y toda la compra se puede mandar a otra categoría con una frase.
   await send(BETO,'fuelbig');
-  assert.match(await say(BETO,'Servicios'),/Servicios/);
-  assert.match(await say(BETO,'confirmar'),/Registrado: .*repartido en 2 categorías/);
-  assert.equal((await q('SELECT sum(amount)::text s FROM appgastos.expense_items')).rows[0].s,'21000.00');await clean();
+  assert.match(await say(BETO,'todo en servicios'),/Categoría: Servicios/);
+  assert.match(await say(BETO,'confirmar'),/Registrado: Compra en YPF por 21000 ARS en Servicios/);
+  assert.equal((await q('SELECT count(*)::int n FROM appgastos.expense_items')).rows[0].n,0);await clean();
   // C) Faltan la fecha y la categoría: el bot pregunta de a una y entiende respuestas cortas.
   await send(BETO,'fuelmissing');
   assert.match(summaryOf(),/¿Qué día fue\?/);assert.doesNotMatch(summaryOf(),/¿En qué categoría/,'una pregunta por vez');
-  assert.match(await say(BETO,'ayer'),/¿En qué categoría va «Nafta Super»\?/);
-  assert.match(await say(BETO,'Combustible'),/Nafta Super — \$20\.000 → Combustible/);
+  assert.match(await say(BETO,'ayer'),/¿En qué categoría va este ticket\?/);
+  assert.match(await say(BETO,'Combustible'),/Categoría: Combustible/);
   assert.equal(await expenses(),0,'responder no registra: falta confirmar');
   assert.match(await say(BETO,'confirmar'),/Registrado: Compra en YPF por 20000 ARS en Combustible/);await clean();
   // Un gasto nuevo no se confunde con la respuesta pendiente.

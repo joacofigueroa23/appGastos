@@ -26,13 +26,14 @@ Estados: `received → processing → needs_review → confirmed | cancelled | f
 
 El total declarado nunca se modifica: una diferencia entre ítems y total aparece como ítem de "ajuste" visible que la persona debe clasificar. La suma de ítems = monto del gasto está garantizada por un trigger de base.
 
-## Redondeos, ajustes y preguntas (cuando el bot no entiende algo)
+## Una categoría por ticket, ajustes dentro del total y preguntas
 
-- **Redondeo:** un renglón «Redondeo -0,32», un campo aparte, o simplemente una diferencia **menor a una unidad de moneda** entre los renglones y el total es un **redondeo**: se ajusta solo, toma la categoría principal (la de mayor importe) y se muestra «Redondeo — -$0,32 → Combustible (automático)». El total declarado nunca se modifica. Si querés otra categoría, «el redondeo va en X».
-- **Otras diferencias** (descuento, recargo, impuesto no incluido, diferencia sin explicar) **no se adivinan**: el bot pregunta «Hay un ajuste de $1.000 (descuento: promo)… ¿Lo sumo a «Combustible»? Respondé *sí* o decime otra categoría.»
-- **Una pregunta por vez, en este orden:** total → fecha → categoría de cada renglón → ajuste → medio de pago. Se responde con una palabra: «ayer», «20 mil», «Combustible», «sí». Responder no registra: falta el «confirmar» (o el registro automático, si está activo y no hay dudas).
+- **Un ticket entra COMPLETO en una sola categoría** (la del comprobante: un súper entero es «Supermercado», aunque traiga leche y detergente; una carga de nafta es «Combustible»). No se reparte renglón por renglón. Si querés separar algo, es explícito: «el detergente va en limpieza» (los demás renglones quedan en la categoría del ticket).
+- **IVA, redondeo, descuentos, recargos y diferencias NO llevan categoría propia ni preguntas:** son parte del total del ticket y siguen su categoría. Un renglón «Redondeo -0,32», un campo de redondeo, o una diferencia menor a $1 se muestran como «Redondeo — -$0,32 (incluido en el total)». **El total declarado es lo que se registra**, siempre.
+- Si los renglones no suman el total y nada lo explica (por ejemplo $20.000 vs $21.000), el bot registra igual el total completo y lo avisa en el resumen («Los renglones suman $20.000 y el total es $21.000: registro el total completo. Si falta algún renglón, no pasa nada») por si algo se leyó mal; no pregunta.
+- **Cuando de verdad falta un dato, pregunta una cosa por vez, en este orden:** total → fecha → categoría (una sola, para todo el ticket) → medio de pago. Se responde con una palabra: «ayer», «20 mil», «Combustible», o «todo en supermercado». Responder no registra: falta el «confirmar» (o el registro automático, si está activo y no hay dudas).
 - Las respuestas cortas solo se toman como respuesta si hay **un** comprobante abierto, reciente y sin un gasto en curso, y si encajan con lo que se preguntó; un gasto nuevo («gasté 500 en el kiosco…») sigue su camino.
-- Los avisos técnicos de la lectura se dicen en simple («No pude leer el importe de un renglón») y los importes negativos se muestran bien («-$0,32»).
+- Los avisos técnicos de la lectura se dicen en simple («No pude leer el importe de un renglón») y los importes negativos se muestran bien («-$0,32»). En la web hay un selector «Categoría de todo el ticket».
 
 ## Subir archivos desde la web (fotos, PDF, CSV, Excel)
 

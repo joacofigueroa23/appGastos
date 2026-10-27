@@ -1,6 +1,6 @@
 import {formatAmount} from '../whatsapp/replies';
 import {receiptProblems,type DraftContext} from './draft';
-import {includedItems,primaryCategory,toCents} from './reconcile';
+import {fromCents,includedItems,toCents} from './reconcile';
 import type {InvoiceDraft,ReceiptDraft,StatementDraft} from './types';
 const dmy=(d:string|null)=>d?d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(0,4):'sin fecha';
 const money=(a:string|null,cur:string,fam:string)=>{
@@ -16,7 +16,11 @@ export function receiptSummary(d:ReceiptDraft,ctx:DraftContext,code:string):stri
  const head=(d.kind==='payment_receipt'?'💸 Comprobante de pago':'🧾 Ticket')+(d.merchant?' de '+d.merchant:'')+' · '+dmy(d.date);
  const lines:string[]=[head,'Total '+money(d.total,d.currency,ctx.familyCurrency)+' · '+(d.scope==='household'?'gasto de la casa':'gasto personal')];
  const items=d.items.filter(i=>!i.excluded);
- items.slice(0,MAX_LISTED).forEach((i,n)=>lines.push((i.adjustment?'• ':(n+1)+') ')+i.description+' — '+money(i.amount,d.currency,ctx.familyCurrency)+' → '+cat(i.categoryId)+(i.auto?' (automático)':'')));
+ // Un ticket suele ser UNA categoría: se dice una vez. Los ajustes (IVA, redondeo, descuentos) ya están dentro del total.
+ const real=items.filter(i=>!i.adjustment),used=new Set(real.map(i=>i.categoryId)),single=used.size<=1;
+ if(single&&real[0]?.categoryId)lines.push('Categoría: '+cat(real[0].categoryId));
+ items.slice(0,MAX_LISTED).forEach((i,n)=>lines.push((i.adjustment?'• ':(n+1)+') ')+i.description+' — '+money(i.amount,d.currency,ctx.familyCurrency)+(i.adjustment?' (incluido en el total)':single?'':' → '+cat(i.categoryId))));
+ if(items.some(i=>i.adjustment&&i.description==='Diferencia sin explicar'))lines.push('ℹ️ Los renglones suman '+money(fromCents(real.reduce((n,i)=>n+toCents(i.amount),0)),d.currency,ctx.familyCurrency)+' y el total es '+money(d.total,d.currency,ctx.familyCurrency)+': registro el total completo. Si falta algún renglón, no pasa nada.');
  if(items.length>MAX_LISTED)lines.push('… y '+(items.length-MAX_LISTED)+' más.');
  const out=d.items.filter(i=>i.excluded);
  if(out.length)lines.push('Excluidos: '+out.map(i=>i.description).join(', ')+'.');
@@ -45,14 +49,10 @@ export function nextQuestion(d:ReceiptDraft,ctx:DraftContext):string|null{
  if(!d.date)return '¿Qué día fue? (hoy, ayer, 12/10…)';
  const items=includedItems(d);
  if(!items.length)return 'No encontré renglones con importe. Contame qué compraste y de cuánto fue, o mandame otra foto.';
- const real=items.filter(i=>!i.adjustment&&!i.categoryId);
- if(real.length)return '¿En qué categoría va «'+real[0].description+'»?'+(real.length>1?' (Después te pregunto por '+(real.length-1)+' más.) ':' ')+'Tus categorías: '+list+'.';
- const adjustment=items.find(i=>i.adjustment&&!i.categoryId);
- if(adjustment){
-  const primary=primaryCategory(items.filter(i=>!i.adjustment)),name=ctx.categories.find(c=>c.id===primary)?.name;
-  const amount=money(adjustment.amount,d.currency,ctx.familyCurrency);
-  return 'Hay un ajuste de '+amount+' ('+adjustment.description.toLowerCase()+') entre los renglones y el total. '+(name?'¿Lo sumo a «'+name+'»? Respondé *sí* o decime otra categoría.':'¿En qué categoría lo ubico? Tus categorías: '+list+'.');
- }
+ const all=items.filter(i=>!i.adjustment),lacking=all.filter(i=>!i.categoryId);
+ // Sin categoría en ningún renglón: se pregunta UNA vez por todo el ticket. Si el usuario separó algún renglón, se pregunta por los que quedan.
+ if(lacking.length&&lacking.length===all.length)return '¿En qué categoría va '+(d.kind==='payment_receipt'?'este pago':'este ticket')+'? Tus categorías: '+list+'.';
+ if(lacking.length)return '¿En qué categoría va «'+lacking[0].description+'»? Tus categorías: '+list+'.';
  if(!d.paymentMethod)return '¿Cómo pagaste? Efectivo, débito, crédito, transferencia o billetera.';
  if(d.cardId&&!ctx.cards.some(c=>c.id===d.cardId&&c.active))return '¿Con qué tarjeta? La que había elegido ya no está disponible.';
  return null;

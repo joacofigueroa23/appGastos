@@ -1,7 +1,7 @@
 import {isDateOnly} from '../../utils/finance';
 import {PAYMENT_CODES,type PaymentCode} from '../../shared/apiTypes';
 import {normalizeName} from '../whatsapp/candidate';
-import {fromCents,includedItems,recompute,toCents} from './reconcile';
+import {fromCents,includedItems,primaryCategory,recompute,toCents} from './reconcile';
 import type {DocumentKind,DraftItem,DraftLine,Extraction,InvoiceDraft,ReceiptDraft,StatementDraft} from './types';
 export interface DraftContext {
  categories:{id:string;name:string;active:boolean}[];cards:{id:string;name:string;active:boolean;cardType:'credit_card'|'debit_card'|null}[];
@@ -35,7 +35,10 @@ export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_r
  }
  const dropped=e.items.filter(i=>!i.amount).length;
  if(dropped)notes.push('No pude leer el importe de '+dropped+' renglón'+(dropped===1?'':'es')+': no '+(dropped===1?'lo':'los')+' incluí.');
- let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:categoryId(ctx,i.category),excluded:false}));
+ // Un ticket entra COMPLETO en una sola categoría (un súper entero es «Supermercado»; no se reparte renglón por renglón): la del comprobante o, si el modelo
+ // solo categorizó renglones, la de mayor importe. El usuario puede separar un renglón aparte si quiere («el detergente va en limpieza»).
+ const ticketCategory=categoryId(ctx,e.category)??primaryCategory(usable.flatMap(i=>{const c=categoryId(ctx,i.category);return c?[{categoryId:c,amount:i.amount!}]:[];}));
+ let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:ticketCategory,excluded:false}));
  let total=e.totalAmount;
  if(total===null&&items.length){total=fromCents(items.reduce((n,i)=>n+toCents(i.amount),0));notes.push('El comprobante no muestra un total legible: usé la suma de los conceptos.');}
  if(!items.length&&total)items=[{id:1,description:e.merchant||(kind==='payment_receipt'?'Pago':'Compra'),amount:total,categoryId:categoryId(ctx,e.category),excluded:false}];
@@ -117,7 +120,7 @@ export type Edit=
  |{type:'paymentMethod';value:PaymentCode}|{type:'cardId';value:string|null}|{type:'noExpense';value:boolean}|{type:'link';expenseId:string|null}
  |{type:'itemCategory';itemId:number;categoryId:string|null}|{type:'itemExcluded';itemId:number;excluded:boolean}
  |{type:'lineCategory';lineId:number;categoryId:string|null}|{type:'lineExcluded';lineId:number;excluded:boolean}
- |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'settle';occurrenceId:null}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
+ |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'settle';occurrenceId:null}|{type:'ticketCategory';categoryId:string}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
 export type EditResult={draft:ReceiptDraft|StatementDraft;error?:undefined}|{draft?:undefined;error:string};
 const fail=(error:string):EditResult=>({error});
 export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftContext):EditResult{
@@ -160,6 +163,10 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
    if(edit.expenseId&&!d.duplicates.some(x=>x.expenseId===edit.expenseId))return fail('Ese gasto no está entre las coincidencias.');
    d={...d,linkExpenseId:edit.expenseId,noExpense:edit.expenseId?false:d.noExpense};break;
   case 'settle':d={...d,settle:null};break;
+  case 'ticketCategory':
+   if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
+   // Toda la compra en esa categoría; los ajustes (IVA, redondeo, descuentos) la siguen solos.
+   d={...d,items:d.items.map(i=>i.adjustment?i:{...i,categoryId:edit.categoryId})};break;
   case 'itemCategory':{
    const item=d.items.find(i=>i.id===edit.itemId);
    if(!item)return fail('Ese concepto no existe.');

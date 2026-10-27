@@ -17,19 +17,19 @@ export function reconcile(included:{amount:string}[],total:string|null,c:{discou
  if(diff===0)return [];
  // Impuestos "incluidos" ya están en el precio de los conceptos o del total: no se suman otra vez.
  const parts:Adjustment[]=[
-  ...c.discounts.map(d=>({description:'Descuento: '+d.description,amount:fromCents(-toCents(d.amount)),explained:true})),
-  ...c.surcharges.map(d=>({description:'Recargo: '+d.description,amount:d.amount,explained:true})),
-  ...(c.taxesIncluded?[]:c.taxes.map(d=>({description:'Impuesto: '+d.description,amount:d.amount,explained:true}))),
+  ...c.discounts.map(d=>({description:'Descuento: '+d.description,amount:fromCents(-toCents(d.amount)),explained:true,auto:true})),
+  ...c.surcharges.map(d=>({description:'Recargo: '+d.description,amount:d.amount,explained:true,auto:true})),
+  ...(c.taxesIncluded?[]:c.taxes.map(d=>({description:'Impuesto: '+d.description,amount:d.amount,explained:true,auto:true}))),
   ...(c.rounding&&toCents(c.rounding)!==0?[{description:'Redondeo',amount:c.rounding,explained:true,auto:true}]:[]),
  ];
  if(parts.length&&sum(parts)===diff)return parts;
  // Una diferencia menor a una unidad de moneda (ej. -0,32) es redondeo, aunque el comprobante no lo diga: no hace falta preguntar.
  if(Math.abs(diff)<=100)return [{description:'Redondeo',amount:fromCents(diff),explained:true,auto:true}];
- return [{description:'Diferencia sin explicar',amount:fromCents(diff),explained:false}];
+ return [{description:'Diferencia sin explicar',amount:fromCents(diff),explained:false,auto:true}];
 }
 const ADJUSTMENT_ID=1000;
 // Recalcula las partidas de ajuste de un borrador. Conserva la categoría que el usuario ya les asignó (por descripción).
-// El redondeo toma la categoría principal (la de mayor importe) mientras el usuario no elija otra; el resto de los ajustes siempre se preguntan.
+// Todo ajuste (IVA, redondeo, descuento, diferencia) forma parte del total del ticket y toma su categoría (la de mayor importe) mientras el usuario no elija otra: no se pregunta.
 export function recompute(draft:ReceiptDraft):ReceiptDraft{
  const real=draft.items.filter(i=>!i.adjustment),previous=new Map(draft.items.filter(i=>i.adjustment).map(i=>[i.description,i]));
  const included=real.filter(i=>!i.excluded),primary=primaryCategory(included);

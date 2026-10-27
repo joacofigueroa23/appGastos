@@ -375,10 +375,12 @@ export function bareEdit(draft:ReceiptDraft,text:string,ctx:DraftContext):Edit[]
   if(!/^(?:hoy|ayer|anteayer|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)$/i.test(t))return null;
   const v=parseDateText(t,ctx.today);return v?[{type:'date',value:v}]:null;
  }
- const target=includedItems(draft).find(i=>!i.adjustment&&!i.categoryId)??includedItems(draft).find(i=>i.adjustment&&!i.categoryId);
- if(!target)return null;
- const c=findCategory(ctx.categories,t.replace(/^(?:en |va en |ponelo en |ponela en |la categoria |categoria )+/i,'').trim());
- return c?[{type:'itemCategory',itemId:target.id,categoryId:c.id}]:null;
+ const all=includedItems(draft).filter(i=>!i.adjustment),lacking=all.filter(i=>!i.categoryId);
+ if(!lacking.length)return null;
+ const c=findCategory(ctx.categories,t.replace(/^(?:en |va en |ponelo en |ponela en |la categoria |categoria |todo en |todo )+/i,'').trim());
+ if(!c)return null;
+ // Ningún renglón tiene categoría: la respuesta es para TODO el ticket. Si se separó alguno, es para el que falta.
+ return lacking.length===all.length?[{type:'ticketCategory',categoryId:c.id}]:[{type:'itemCategory',itemId:lacking[0].id,categoryId:c.id}];
 }
 async function bareAnswer(pool:Pool,db:Connection,member:{id:string;role:'admin'|'member'},family:string,text:string,hasConversation:boolean):Promise<{outcome:'document_command';reply:string}|null>{
  if(hasConversation)return null;
@@ -432,16 +434,9 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
     if(doc.kind==='card_statement')return say('Los resúmenes de tarjeta se revisan en la web (Comprobantes): ahí elegís qué importar.');
     if(doc.kind==='pending_invoice')return say(member.role==='admin'?'Las facturas pendientes se revisan en la web (Comprobantes).':'Esa factura queda pendiente de revisión por un administrador.');
     {
-     // «Sí» a la pregunta del ajuste («¿lo sumo a Combustible?»): se asigna a la categoría principal y se sigue. Si todavía falta otra cosa,
-     // se pregunta eso (una cosa por vez) en vez de listar errores.
-     let target=doc;
-     const current=asReceipt(doc.draft);
-     if(current){
-      const pendingAdjustments=current.items.filter(i=>i.adjustment&&!i.excluded&&!i.categoryId),primary=primaryCategory(includedItems(current).filter(i=>!i.adjustment));
-      if(pendingAdjustments.length&&primary){const edited=await editDocument(db,doc,pendingAdjustments.map(i=>({type:'itemCategory' as const,itemId:i.id,categoryId:primary})),member.role);target={...doc,draft:edited.draft};}
-     }
-     try{return say(await confirmDocument(pool,db,target,{memberId:member.id,role:member.role}));}
-     catch(error){const draft=asReceipt(target.draft);if(error instanceof DocumentActionError&&draft&&!draft.noExpense&&!draft.linkExpenseId)return say(show(draft));throw error;}
+     // Si todavía falta algo, se pregunta lo que falta (una cosa por vez) en vez de listar errores.
+     try{return say(await confirmDocument(pool,db,doc,{memberId:member.id,role:member.role}));}
+     catch(error){const draft=asReceipt(doc.draft);if(error instanceof DocumentActionError&&draft&&!draft.noExpense&&!draft.linkExpenseId)return say(show(draft));throw error;}
     }
    case 'cancel':return say(await cancelDocument(db,doc));
    case 'kind':return say((await changeKind(db,doc,cmd.value,member.role)).reply);
@@ -471,6 +466,11 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
    case 'date':{const v=parseDateText(cmd.raw,ctx.today);if(!v)return say('No entendí esa fecha. Probá con «fecha 10/10» o «fecha ayer».');edits=[{type:'date',value:v}];break;}
    case 'total':{const v=parseAmountText(cmd.raw);if(!v)return say('No entendí ese total. Probá con «total 19000».');edits=[{type:'total',value:v}];break;}
    case 'exclude':{const item=findItem(d,cmd.item);if(!item)return null;edits=[{type:'itemExcluded',itemId:item.id,excluded:true}];break;}
+   case 'ticketCategory':{
+    const category=findCategory(ctx.categories,cmd.category);
+    if(!category)return say('No encontré la categoría «'+cmd.category+'». Las categorías válidas son: '+ctx.categories.filter(c=>c.active).map(c=>c.name).join(', ')+'.');
+    edits=[{type:'ticketCategory',categoryId:category.id}];break;
+   }
    case 'itemCategory':{
     const item=findItem(d,cmd.item);
     if(!item)return null; // "gasté 500 en kiosco" no es un comando de este comprobante
