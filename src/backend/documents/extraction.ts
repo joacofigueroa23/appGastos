@@ -55,7 +55,7 @@ export function parseExtraction(raw:unknown,categories:string[]):Extraction{
  const items:ExtractedItem[]=list(o.items,limits.maxItems,'conceptos').flatMap(x=>{
   const description=text(x.description,200);
   if(!description)return [];
-  const amount=money(x.amount,'concepto');
+  const amount=money(x.amount,'concepto',true); // un renglón puede ser negativo (redondeo, descuento): se interpreta al armar el borrador
   return [{description,amount:amount&&amount!=='0.00'?amount:null,category:category(x.category)}];
  });
  const lines:ExtractedLine[]=list(o.lines,limits.maxLines,'consumos').flatMap(x=>{
@@ -86,7 +86,7 @@ export function parseExtraction(raw:unknown,categories:string[]):Extraction{
  })};
  return {
   documentType,merchant:text(o.merchant,150),documentDate:date(o.documentDate,'documento'),dueDate:date(o.dueDate,'vencimiento'),currency:currency(o.currency),
-  totalAmount:money(o.totalAmount,'total'),taxesIncluded:flag(o.taxesIncluded),items,discounts:moneyLines(o.discounts,'descuento'),taxes:moneyLines(o.taxes,'impuesto'),surcharges:moneyLines(o.surcharges,'recargo'),
+  totalAmount:money(o.totalAmount,'total'),taxesIncluded:flag(o.taxesIncluded),items,rounding:money(o.rounding,'redondeo',true),discounts:moneyLines(o.discounts,'descuento'),taxes:moneyLines(o.taxes,'impuesto'),surcharges:moneyLines(o.surcharges,'recargo'),
   paymentStatus:status,paymentMethod:(PAYMENT_CODES as readonly unknown[]).includes(o.paymentMethod)?o.paymentMethod as Extraction['paymentMethod']:null,
   paymentReference:text(o.paymentReference,60,false),isCardPayment:flag(o.isCardPayment),isOwnTransfer:flag(o.isOwnTransfer),
   statementPeriod:text(o.statementPeriod,60),closingDate:date(o.closingDate,'cierre'),statementTotals:totals,lines,
@@ -103,7 +103,7 @@ No devuelvas números de tarjeta, códigos de seguridad, documentos de identidad
 documentType: purchase_receipt = ticket o comprobante de una compra ya realizada; pending_invoice = factura o boleta de un servicio, colegio, alquiler o similar con importe a pagar;
 payment_receipt = comprobante de un pago o transferencia ya hecho; card_statement = resumen de tarjeta de crédito; unknown = no se puede determinar con seguridad.
 paymentStatus es "paid" SOLO si el documento dice explícitamente que fue pagado, aprobado o acreditado; una factura con vencimiento futuro es "unpaid".
-Conceptos (items): cada uno con el importe total de su línea. Descuentos, impuestos y recargos van en sus propias listas con importes positivos. taxesIncluded=true si el total ya incluye impuestos.
+Conceptos (items): cada uno con el importe total de su línea. Descuentos, impuestos y recargos van en sus propias listas con importes positivos. Si el comprobante trae una línea de redondeo (ej. "Redondeo -0.32"), devolvé su importe CON SIGNO en rounding y no la pongas como concepto; si no hay, rounding=null. taxesIncluded=true si el total ya incluye impuestos.
 Resumen de tarjeta: cada consumo en lines con su kind (purchase, refund, interest, fee, tax, adjustment, payment, other); las devoluciones y pagos con importe negativo; cuotas en installmentCurrent/installmentTotal; el total del resumen en statementTotals por moneda. El pago del resumen anterior es kind=payment.
 configList: si el documento NO es un comprobante sino una lista escrita (a mano o impresa) de presupuestos mensuales por categoría (por ejemplo "Mascotas 250.000, Ocio 500.000") o de gastos fijos con sus importes (y a veces su día de vencimiento), devolvé documentType=unknown y completá configList: kind=budget o fixed, y un item por línea con name (como está escrito), amount (decimal sin separadores), dueDay si lo dice y category (SOLO una de las categorías recibidas, la más cercana, o null). Si no es una lista así, configList.kind=null e items vacío.
 category (en cada ítem y también para el documento entero): elegí SOLO entre las categorías recibidas, la más cercana al rubro del producto o del comercio (un suéter o una remera → ropa; bananas, leche o un supermercado → supermercado o alimentos; una farmacia → salud). Usá null solo si ninguna se parece.
@@ -114,13 +114,13 @@ const money={type:Type.OBJECT,properties:{description:str,amount:str},required:[
 const schema={type:Type.OBJECT,properties:{
  documentType:{type:Type.STRING,enum:[...KINDS]},merchant:str,documentDate:str,dueDate:str,currency:str,totalAmount:str,taxesIncluded:bool,
  items:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{description:str,amount:str,category:str},required:['description','amount','category']}},
- discounts:{type:Type.ARRAY,items:money},taxes:{type:Type.ARRAY,items:money},surcharges:{type:Type.ARRAY,items:money},
+ rounding:str,discounts:{type:Type.ARRAY,items:money},taxes:{type:Type.ARRAY,items:money},surcharges:{type:Type.ARRAY,items:money},
  paymentStatus:{type:Type.STRING,enum:['paid','unpaid','unknown']},paymentMethod:{type:Type.STRING,nullable:true,enum:[...PAYMENT_CODES]},paymentReference:str,isCardPayment:bool,isOwnTransfer:bool,
  statementPeriod:str,closingDate:str,statementTotals:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{currency:str,total:str},required:['currency','total']}},
  lines:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{date:str,merchant:str,amount:str,currency:str,kind:{type:Type.STRING,enum:[...LINE_KINDS]},installmentCurrent:num,installmentTotal:num,category:str},required:['date','merchant','amount','currency','kind','installmentCurrent','installmentTotal','category']}},
  configList:{type:Type.OBJECT,properties:{kind:{type:Type.STRING,nullable:true,enum:['budget','fixed']},items:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{name:str,amount:str,dueDay:num,category:str},required:['name','amount','dueDay','category']}}},required:['kind','items']},
  invoiceReference:str,concept:str,category:str,warnings:{type:Type.ARRAY,items:{type:Type.STRING}},missingFields:{type:Type.ARRAY,items:{type:Type.STRING}},
-},required:['documentType','merchant','documentDate','dueDate','currency','totalAmount','taxesIncluded','items','discounts','taxes','surcharges','paymentStatus','paymentMethod','paymentReference','isCardPayment','isOwnTransfer','statementPeriod','closingDate','statementTotals','lines','configList','invoiceReference','concept','category','warnings','missingFields']};
+},required:['documentType','merchant','documentDate','dueDate','currency','totalAmount','taxesIncluded','items','rounding','discounts','taxes','surcharges','paymentStatus','paymentMethod','paymentReference','isCardPayment','isOwnTransfer','statementPeriod','closingDate','statementTotals','lines','configList','invoiceReference','concept','category','warnings','missingFields']};
 // Precios opcionales por millón de tokens (GEMINI_INPUT_PRICE_PER_MTOK / GEMINI_OUTPUT_PRICE_PER_MTOK): sin ellos no se estima costo.
 const price=(name:string)=>{const v=Number(process.env[name]);return Number.isFinite(v)&&v>0?v:null;};
 export function geminiDocumentExtractor(generate?:DocGenerate):DocumentExtractor{

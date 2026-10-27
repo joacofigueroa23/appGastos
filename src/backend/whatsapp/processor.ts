@@ -60,7 +60,10 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
      const cmd=query?null:parseCommand(row.text_body!);
      const adminPending=!query&&(cmd?.type==='confirm'&&!!cmd.code||(await pool.query("SELECT 1 FROM appgastos.admin_actions WHERE family_id=$1 AND member_id=$2 AND state='pending'",[row.family_id,matches[0].id])).rowCount!>0);
      const adminReply=adminPending?await transaction(pool,db=>adminCommand(pool,db,{id:matches[0].id,role},row.family_id,row.text_body!,!!conversation,at,catalog!.familyCurrency)):null;
-     const docReply=!query&&!adminReply&&parseCommand(row.text_body!)!==null
+     // Una respuesta corta sin comando («ayer», «Combustible», «20 mil») también puede ser para un comprobante abierto que está esperando un dato.
+     const mayBeAnswer=!query&&!adminReply&&parseCommand(row.text_body!)===null&&!conversation&&row.text_body!.trim().split(/\s+/).length<=4
+      &&(await pool.query("SELECT 1 FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state='needs_review' AND kind IN ('purchase_receipt','payment_receipt') AND draft IS NOT NULL LIMIT 1",[row.family_id,matches[0].id])).rowCount!>0;
+     const docReply=!query&&!adminReply&&(parseCommand(row.text_body!)!==null||mayBeAnswer)
       ?await transaction(pool,db=>documentCommand(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation)):null;
      if(adminReply)decision={kind:'reply',outcome:adminReply.outcome,reply:adminReply.reply};
      else if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};

@@ -14,7 +14,7 @@ const png=()=>Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0
 const pdf=(pages=1)=>Buffer.from('%PDF-1.4\n'+Array.from({length:pages},(_,i)=>`${i+1} 0 obj << /Type /Page /Parent 9 0 R >> endobj\n`).join('')+'1 0 obj << /Type /Pages >> endobj\n');
 const ctx:DraftContext={categories:[{id:'c-ali',name:'Alimentos',active:true},{id:'c-lim',name:'Limpieza',active:true},{id:'c-hig',name:'Higiene personal',active:true},{id:'c-old',name:'Vieja',active:false}],cards:[{id:'k1',name:'Visa',active:true,cardType:null}],familyCurrency:'ARS',today:'2026-10-20'};
 const names=ctx.categories.map(c=>c.name);
-const blank:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:null,totalAmount:null,taxesIncluded:null,items:[],discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,category:null,configList:{kind:null,items:[]},warnings:[],missingFields:[]};
+const blank:Extraction={documentType:'purchase_receipt',merchant:null,documentDate:null,dueDate:null,currency:null,totalAmount:null,taxesIncluded:null,items:[],rounding:null,discounts:[],taxes:[],surcharges:[],paymentStatus:'unknown',paymentMethod:null,paymentReference:null,isCardPayment:null,isOwnTransfer:null,statementPeriod:null,closingDate:null,statementTotals:[],lines:[],invoiceReference:null,concept:null,category:null,configList:{kind:null,items:[]},warnings:[],missingFields:[]};
 
 test('Archivos: tipo real, tamaño y páginas (no alcanza con el tipo declarado)',()=>{
  assert.equal(detectType(jpeg()),'image/jpeg');assert.equal(detectType(png()),'image/png');assert.equal(detectType(pdf()),'application/pdf');
@@ -101,7 +101,10 @@ test('Conciliación: la suma de conceptos y ajustes siempre es el total, y el to
  // Recargo + descuento a la vez.
  assert.equal(reconcile(items,'20500.00',{...c0,surcharges:[{description:'Envío',amount:'1000.00'}],discounts:[{description:'Cupón',amount:'500.00'}]}).length,2);
  // Diferencia que nadie explica (redondeo, error de lectura): partida visible, nunca se ajusta el total en silencio.
- const odd=reconcile(items,'19999.50',c0);assert.deepEqual(odd,[{description:'Diferencia sin explicar',amount:'-0.50',explained:false}]);
+ // Menos de una unidad de moneda: redondeo (automático). Más: diferencia sin explicar (se pregunta).
+ const odd=reconcile(items,'19999.50',c0);assert.deepEqual(odd,[{description:'Redondeo',amount:'-0.50',explained:true,auto:true}]);
+ assert.deepEqual(reconcile(items,'19000.00',c0),[{description:'Diferencia sin explicar',amount:'-1000.00',explained:false}]);
+ assert.deepEqual(reconcile(items,'19999.68',{...c0,rounding:'-0.32'}),[{description:'Redondeo',amount:'-0.32',explained:true,auto:true}]);
  const sumCents=(list:{amount:string}[])=>list.reduce((n,l)=>n+toCents(l.amount),0);
  const cases:[string,typeof c0][]=[['19000.00',{...c0,discounts:[{description:'Promo',amount:'1000.00'}]}],['19999.50',c0],['23000.00',c0],['20000.00',c0]];
  for(const [total,comp] of cases)assert.equal(sumCents(items)+sumCents(reconcile(items,total,comp)),toCents(total),'invariante '+total);
@@ -229,4 +232,18 @@ test('un ticket con un solo total toma la categoría que Gemini eligió para el 
  assert.equal(without.items[0].categoryId,null,'sin categoría clara se pregunta, no se inventa');
  assert.equal(parseExtraction({category:'Inventada'},['Limpieza']).category,null,'solo categorías existentes');
  assert.equal(parseExtraction({category:'limpieza'},['Limpieza']).category,'Limpieza');
+});
+
+test('redondeo en un ticket de combustible: un renglón negativo o un campo aparte no son compras; no quedan avisos técnicos',()=>{
+ const ctx2:DraftContext={categories:[{id:'c-comb',name:'Combustible',active:true}],cards:[],familyCurrency:'ARS',today:'2026-10-27'};
+ const base={documentType:'purchase_receipt',merchant:'YPF',documentDate:'2026-10-26',currency:'ARS',totalAmount:'19999.68',paymentMethod:'cash'};
+ const parsed=parseExtraction({...base,items:[{description:'Nafta Super',amount:'20000.00',category:'Combustible'},{description:'Redondeo',amount:'-0.32',category:null}]},['Combustible']);
+ assert.deepEqual(parsed.items.map(i=>i.amount),['20000.00','-0.32']);assert.ok(!parsed.warnings.includes('importe_ilegible:concepto'));
+ const d=buildReceiptDraft(parsed,ctx2,'purchase_receipt',false);
+ assert.deepEqual(d.items.map(i=>[i.description,i.amount,i.categoryId,!!i.adjustment]),[['Nafta Super','20000.00','c-comb',false],['Redondeo','-0.32','c-comb',true]]);
+ assert.deepEqual(receiptProblems(d,ctx2),[],'no falta nada: se puede registrar');
+ // Un descuento negativo con nombre propio se explica como descuento (pero su categoría sí se pregunta).
+ const promo=buildReceiptDraft(parseExtraction({...base,totalAmount:'19000.00',items:[{description:'Nafta Super',amount:'20000.00',category:'Combustible'},{description:'Promo',amount:'-1000.00',category:null}]},['Combustible']),ctx2,'purchase_receipt',false);
+ assert.deepEqual(promo.items.filter(i=>i.adjustment).map(i=>[i.description,i.amount,i.categoryId]),[['Descuento: Promo','-1000.00',null]]);
+ assert.deepEqual(receiptProblems(promo,ctx2),['la categoría de «Descuento: Promo»']);
 });

@@ -26,6 +26,14 @@ Estados: `received → processing → needs_review → confirmed | cancelled | f
 
 El total declarado nunca se modifica: una diferencia entre ítems y total aparece como ítem de "ajuste" visible que la persona debe clasificar. La suma de ítems = monto del gasto está garantizada por un trigger de base.
 
+## Redondeos, ajustes y preguntas (cuando el bot no entiende algo)
+
+- **Redondeo:** un renglón «Redondeo -0,32», un campo aparte, o simplemente una diferencia **menor a una unidad de moneda** entre los renglones y el total es un **redondeo**: se ajusta solo, toma la categoría principal (la de mayor importe) y se muestra «Redondeo — -$0,32 → Combustible (automático)». El total declarado nunca se modifica. Si querés otra categoría, «el redondeo va en X».
+- **Otras diferencias** (descuento, recargo, impuesto no incluido, diferencia sin explicar) **no se adivinan**: el bot pregunta «Hay un ajuste de $1.000 (descuento: promo)… ¿Lo sumo a «Combustible»? Respondé *sí* o decime otra categoría.»
+- **Una pregunta por vez, en este orden:** total → fecha → categoría de cada renglón → ajuste → medio de pago. Se responde con una palabra: «ayer», «20 mil», «Combustible», «sí». Responder no registra: falta el «confirmar» (o el registro automático, si está activo y no hay dudas).
+- Las respuestas cortas solo se toman como respuesta si hay **un** comprobante abierto, reciente y sin un gasto en curso, y si encajan con lo que se preguntó; un gasto nuevo («gasté 500 en el kiosco…») sigue su camino.
+- Los avisos técnicos de la lectura se dicen en simple («No pude leer el importe de un renglón») y los importes negativos se muestran bien («-$0,32»).
+
 ## Subir archivos desde la web (fotos, PDF, CSV, Excel)
 
 La pantalla Comprobantes tiene «Subir archivo». Acepta foto (JPG/PNG), PDF, `.csv` y `.xlsx` (primera hoja, hasta 200 filas de datos y 5 MB). Se lee en el momento, **no se guarda el archivo ni su nombre**, y queda un borrador para revisar: cada fila se clasifica por categoría y la pantalla muestra el total por categoría de lo seleccionado. Nada se registra hasta confirmar. Requiere sesión de integrante (con Basic Auth no se puede subir). El mismo archivo no se procesa dos veces. Las planillas se leen sin dependencias externas (un `.xlsx` es un ZIP con XML) con tope de tamaño descomprimido; fórmulas y macros no se ejecutan, solo se leen valores.

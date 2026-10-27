@@ -17,12 +17,24 @@ export function classify(e:Extraction):DocumentKind{
  if(e.documentType==='card_statement'&&!e.lines.length)return 'unknown';
  return e.documentType;
 }
+// Avisos técnicos de la lectura dichos en simple («importe_ilegible:concepto» → «No pude leer el importe de un renglón»).
+const WARNINGS:Record<string,string>={'importe_ilegible:concepto':'No pude leer el importe de un renglón.','importe_ilegible:total':'No pude leer bien el total.','fecha_ilegible:documento':'No pude leer bien la fecha.',
+ 'importe_ilegible:redondeo':'No pude leer el redondeo.',demasiados_conceptos:'El comprobante tiene muchos renglones: puede que falten algunos.',tipo_no_reconocido:'No estoy seguro de qué tipo de comprobante es.'};
+export const friendlyWarning=(w:string)=>WARNINGS[w]??(/^[a-z_]+:[a-z_]+$/.test(w)?'No pude leer bien una parte del comprobante.':w);
 export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_receipt'|'payment_receipt',householdHint:boolean):ReceiptDraft{
  const notes:string[]=[],currency=e.currency||ctx.familyCurrency;
  if(!e.currency)notes.push('Moneda no detectada: asumí '+ctx.familyCurrency+'.');
- const usable=e.items.filter(i=>i.amount);
- const dropped=e.items.length-usable.length;
- if(dropped)notes.push(dropped+' concepto(s) sin importe legible: no se incluyeron.');
+ // Un renglón «Redondeo» (o con importe negativo) no es una compra: el redondeo se concilia como ajuste y un descuento negativo, como descuento.
+ let rounding=e.rounding,extraDiscounts:{description:string;amount:string}[]=[];
+ const usable:typeof e.items=[];
+ for(const i of e.items){
+  if(!i.amount)continue;
+  if(/redondeo/.test(normalizeName(i.description))){rounding=fromCents(toCents(rounding||'0.00')+toCents(i.amount));continue;}
+  if(toCents(i.amount)<0){extraDiscounts.push({description:i.description,amount:fromCents(-toCents(i.amount))});continue;}
+  usable.push(i);
+ }
+ const dropped=e.items.filter(i=>!i.amount).length;
+ if(dropped)notes.push('No pude leer el importe de '+dropped+' renglón'+(dropped===1?'':'es')+': no '+(dropped===1?'lo':'los')+' incluí.');
  let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:categoryId(ctx,i.category),excluded:false}));
  let total=e.totalAmount;
  if(total===null&&items.length){total=fromCents(items.reduce((n,i)=>n+toCents(i.amount),0));notes.push('El comprobante no muestra un total legible: usé la suma de los conceptos.');}
@@ -31,10 +43,10 @@ export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_r
  const draft:ReceiptDraft={
   kind,scope:householdHint?'household':'personal',currency,date:e.documentDate,merchant:e.merchant,
   description:e.merchant?(kind==='payment_receipt'?'Pago a ':'Compra en ')+e.merchant:kind==='payment_receipt'?'Pago con comprobante':'Compra con comprobante',
-  total,items,components:{discounts:e.discounts,taxes:e.taxes,surcharges:e.surcharges,taxesIncluded:e.taxesIncluded===true},
+  total,items,components:{discounts:[...e.discounts,...extraDiscounts],taxes:e.taxes,surcharges:e.surcharges,taxesIncluded:e.taxesIncluded===true,rounding},
   paymentMethod:e.paymentMethod,cardId:null,duplicates:[],linkExpenseId:null,noExpense,
   noExpenseReason:noExpense?(e.isCardPayment?'Parece el pago de un resumen de tarjeta: los consumos ya están en el resumen, no es un gasto nuevo.':'Parece una transferencia entre cuentas propias: no es un gasto.'):null,
-  paymentReference:e.paymentReference,notes:[...notes,...e.warnings].slice(0,NOTE_MAX),
+  paymentReference:e.paymentReference,notes:[...notes,...e.warnings.map(friendlyWarning)].slice(0,NOTE_MAX),
  };
  return recompute(draft);
 }
@@ -152,7 +164,7 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
    const item=d.items.find(i=>i.id===edit.itemId);
    if(!item)return fail('Ese concepto no existe.');
    if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
-   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId}:i)};break;
+   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId,auto:false}:i)};break;
   }
   case 'itemExcluded':{
    const item=d.items.find(i=>i.id===edit.itemId);
