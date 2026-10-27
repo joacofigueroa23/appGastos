@@ -6,7 +6,7 @@ export interface ExtractedLine {date:string|null;merchant:string;amount:string|n
 // Lo que el modelo leyó, ya validado. Es dato no confiable hasta que el usuario lo confirma.
 export interface Extraction {
  documentType:DocumentKind;merchant:string|null;documentDate:string|null;dueDate:string|null;currency:string|null;totalAmount:string|null;
- taxesIncluded:boolean|null;items:ExtractedItem[];discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];
+ taxesIncluded:boolean|null;items:ExtractedItem[];discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];rounding:string|null;
  paymentStatus:'paid'|'unpaid'|'unknown';paymentMethod:PaymentCode|null;paymentReference:string|null;isCardPayment:boolean|null;isOwnTransfer:boolean|null;
  statementPeriod:string|null;closingDate:string|null;statementTotals:{currency:string;total:string}[];lines:ExtractedLine[];
  // Lista escrita (a mano o impresa) de presupuestos mensuales por categoría o de gastos fijos: no es un comprobante, la usa el administrador para configurar.

@@ -6,7 +6,8 @@ export type StatementLineKind='purchase'|'refund'|'interest'|'fee'|'tax'|'adjust
 // Importes siempre como texto decimal exacto ("1234.56"): nunca coma flotante.
 export interface MoneyLine {description:string;amount:string}
 export interface DuplicateRef {expenseId:string;date:string;amount:string;currency:string;label:string;author:string|null}
-export interface DraftItem {id:number;description:string;amount:string;categoryId:string|null;excluded:boolean;adjustment?:boolean}
+// auto: ajuste (redondeo) al que el sistema le puso la categoría principal; si el usuario elige otra, deja de ser automático.
+export interface DraftItem {id:number;description:string;amount:string;categoryId:string|null;excluded:boolean;adjustment?:boolean;auto?:boolean}
 export interface DraftLine {
  id:number;date:string|null;merchant:string;amount:string;currency:string;kind:StatementLineKind;installment:{current:number;total:number}|null;
  categoryId:string|null;excluded:boolean;blockedReason:string|null;duplicates:DuplicateRef[];
@@ -14,7 +15,7 @@ export interface DraftLine {
 }
 export interface ReceiptDraft {
  kind:'purchase_receipt'|'payment_receipt';scope:'personal'|'household';currency:string;date:string|null;merchant:string|null;description:string;
- total:string|null;items:DraftItem[];components:{discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];taxesIncluded:boolean};
+ total:string|null;items:DraftItem[];components:{discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];taxesIncluded:boolean;rounding?:string|null};
  paymentMethod:PaymentCode|null;cardId:string|null;duplicates:DuplicateRef[];linkExpenseId:string|null;noExpense:boolean;noExpenseReason:string|null;
  paymentReference:string|null;notes:string[];
  // Obligación fija pendiente que este comprobante parece saldar (solo se calcula para administradores). Al confirmar se registra UN gasto y se vincula.

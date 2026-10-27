@@ -1,7 +1,7 @@
 import {isDateOnly} from '../../utils/finance';
 import {PAYMENT_CODES,type PaymentCode} from '../../shared/apiTypes';
 import {normalizeName} from '../whatsapp/candidate';
-import {fromCents,includedItems,recompute,toCents} from './reconcile';
+import {fromCents,includedItems,primaryCategory,recompute,toCents} from './reconcile';
 import type {DocumentKind,DraftItem,DraftLine,Extraction,InvoiceDraft,ReceiptDraft,StatementDraft} from './types';
 export interface DraftContext {
  categories:{id:string;name:string;active:boolean}[];cards:{id:string;name:string;active:boolean;cardType:'credit_card'|'debit_card'|null}[];
@@ -17,13 +17,28 @@ export function classify(e:Extraction):DocumentKind{
  if(e.documentType==='card_statement'&&!e.lines.length)return 'unknown';
  return e.documentType;
 }
+// Avisos técnicos de la lectura dichos en simple («importe_ilegible:concepto» → «No pude leer el importe de un renglón»).
+const WARNINGS:Record<string,string>={'importe_ilegible:concepto':'No pude leer el importe de un renglón.','importe_ilegible:total':'No pude leer bien el total.','fecha_ilegible:documento':'No pude leer bien la fecha.',
+ 'importe_ilegible:redondeo':'No pude leer el redondeo.',demasiados_conceptos:'El comprobante tiene muchos renglones: puede que falten algunos.',tipo_no_reconocido:'No estoy seguro de qué tipo de comprobante es.'};
+export const friendlyWarning=(w:string)=>WARNINGS[w]??(/^[a-z_]+:[a-z_]+$/.test(w)?'No pude leer bien una parte del comprobante.':w);
 export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_receipt'|'payment_receipt',householdHint:boolean):ReceiptDraft{
  const notes:string[]=[],currency=e.currency||ctx.familyCurrency;
  if(!e.currency)notes.push('Moneda no detectada: asumí '+ctx.familyCurrency+'.');
- const usable=e.items.filter(i=>i.amount);
- const dropped=e.items.length-usable.length;
- if(dropped)notes.push(dropped+' concepto(s) sin importe legible: no se incluyeron.');
- let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:categoryId(ctx,i.category),excluded:false}));
+ // Un renglón «Redondeo» (o con importe negativo) no es una compra: el redondeo se concilia como ajuste y un descuento negativo, como descuento.
+ let rounding=e.rounding,extraDiscounts:{description:string;amount:string}[]=[];
+ const usable:typeof e.items=[];
+ for(const i of e.items){
+  if(!i.amount)continue;
+  if(/redondeo/.test(normalizeName(i.description))){rounding=fromCents(toCents(rounding||'0.00')+toCents(i.amount));continue;}
+  if(toCents(i.amount)<0){extraDiscounts.push({description:i.description,amount:fromCents(-toCents(i.amount))});continue;}
+  usable.push(i);
+ }
+ const dropped=e.items.filter(i=>!i.amount).length;
+ if(dropped)notes.push('No pude leer el importe de '+dropped+' renglón'+(dropped===1?'':'es')+': no '+(dropped===1?'lo':'los')+' incluí.');
+ // Un ticket entra COMPLETO en una sola categoría (un súper entero es «Supermercado»; no se reparte renglón por renglón): la del comprobante o, si el modelo
+ // solo categorizó renglones, la de mayor importe. El usuario puede separar un renglón aparte si quiere («el detergente va en limpieza»).
+ const ticketCategory=categoryId(ctx,e.category)??primaryCategory(usable.flatMap(i=>{const c=categoryId(ctx,i.category);return c?[{categoryId:c,amount:i.amount!}]:[];}));
+ let items:DraftItem[]=usable.map((i,n)=>({id:n+1,description:i.description,amount:i.amount!,categoryId:ticketCategory,excluded:false}));
  let total=e.totalAmount;
  if(total===null&&items.length){total=fromCents(items.reduce((n,i)=>n+toCents(i.amount),0));notes.push('El comprobante no muestra un total legible: usé la suma de los conceptos.');}
  if(!items.length&&total)items=[{id:1,description:e.merchant||(kind==='payment_receipt'?'Pago':'Compra'),amount:total,categoryId:categoryId(ctx,e.category),excluded:false}];
@@ -31,10 +46,10 @@ export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_r
  const draft:ReceiptDraft={
   kind,scope:householdHint?'household':'personal',currency,date:e.documentDate,merchant:e.merchant,
   description:e.merchant?(kind==='payment_receipt'?'Pago a ':'Compra en ')+e.merchant:kind==='payment_receipt'?'Pago con comprobante':'Compra con comprobante',
-  total,items,components:{discounts:e.discounts,taxes:e.taxes,surcharges:e.surcharges,taxesIncluded:e.taxesIncluded===true},
+  total,items,components:{discounts:[...e.discounts,...extraDiscounts],taxes:e.taxes,surcharges:e.surcharges,taxesIncluded:e.taxesIncluded===true,rounding},
   paymentMethod:e.paymentMethod,cardId:null,duplicates:[],linkExpenseId:null,noExpense,
   noExpenseReason:noExpense?(e.isCardPayment?'Parece el pago de un resumen de tarjeta: los consumos ya están en el resumen, no es un gasto nuevo.':'Parece una transferencia entre cuentas propias: no es un gasto.'):null,
-  paymentReference:e.paymentReference,notes:[...notes,...e.warnings].slice(0,NOTE_MAX),
+  paymentReference:e.paymentReference,notes:[...notes,...e.warnings.map(friendlyWarning)].slice(0,NOTE_MAX),
  };
  return recompute(draft);
 }
@@ -105,7 +120,7 @@ export type Edit=
  |{type:'paymentMethod';value:PaymentCode}|{type:'cardId';value:string|null}|{type:'noExpense';value:boolean}|{type:'link';expenseId:string|null}
  |{type:'itemCategory';itemId:number;categoryId:string|null}|{type:'itemExcluded';itemId:number;excluded:boolean}
  |{type:'lineCategory';lineId:number;categoryId:string|null}|{type:'lineExcluded';lineId:number;excluded:boolean}
- |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'settle';occurrenceId:null}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
+ |{type:'lineAcceptDuplicate';lineId:number;value:boolean}|{type:'settle';occurrenceId:null}|{type:'ticketCategory';categoryId:string}|{type:'lineRefundOf';lineId:number;expenseId:string|null}|{type:'lineScope';lineId:number;value:'personal'|'household'};
 export type EditResult={draft:ReceiptDraft|StatementDraft;error?:undefined}|{draft?:undefined;error:string};
 const fail=(error:string):EditResult=>({error});
 export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftContext):EditResult{
@@ -148,11 +163,15 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
    if(edit.expenseId&&!d.duplicates.some(x=>x.expenseId===edit.expenseId))return fail('Ese gasto no está entre las coincidencias.');
    d={...d,linkExpenseId:edit.expenseId,noExpense:edit.expenseId?false:d.noExpense};break;
   case 'settle':d={...d,settle:null};break;
+  case 'ticketCategory':
+   if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
+   // Toda la compra en esa categoría; los ajustes (IVA, redondeo, descuentos) la siguen solos.
+   d={...d,items:d.items.map(i=>i.adjustment?i:{...i,categoryId:edit.categoryId})};break;
   case 'itemCategory':{
    const item=d.items.find(i=>i.id===edit.itemId);
    if(!item)return fail('Ese concepto no existe.');
    if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
-   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId}:i)};break;
+   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId,auto:false}:i)};break;
   }
   case 'itemExcluded':{
    const item=d.items.find(i=>i.id===edit.itemId);

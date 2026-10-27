@@ -26,6 +26,15 @@ Estados: `received → processing → needs_review → confirmed | cancelled | f
 
 El total declarado nunca se modifica: una diferencia entre ítems y total aparece como ítem de "ajuste" visible que la persona debe clasificar. La suma de ítems = monto del gasto está garantizada por un trigger de base.
 
+## Una categoría por ticket, ajustes dentro del total y preguntas
+
+- **Un ticket entra COMPLETO en una sola categoría** (la del comprobante: un súper entero es «Supermercado», aunque traiga leche y detergente; una carga de nafta es «Combustible»). No se reparte renglón por renglón. Si querés separar algo, es explícito: «el detergente va en limpieza» (los demás renglones quedan en la categoría del ticket).
+- **IVA, redondeo, descuentos, recargos y diferencias NO llevan categoría propia ni preguntas:** son parte del total del ticket y siguen su categoría. Un renglón «Redondeo -0,32», un campo de redondeo, o una diferencia menor a $1 se muestran como «Redondeo — -$0,32 (incluido en el total)». **El total declarado es lo que se registra**, siempre.
+- Si los renglones no suman el total y nada lo explica (por ejemplo $20.000 vs $21.000), el bot registra igual el total completo y lo avisa en el resumen («Los renglones suman $20.000 y el total es $21.000: registro el total completo. Si falta algún renglón, no pasa nada») por si algo se leyó mal; no pregunta.
+- **Cuando de verdad falta un dato, pregunta una cosa por vez, en este orden:** total → fecha → categoría (una sola, para todo el ticket) → medio de pago. Se responde con una palabra: «ayer», «20 mil», «Combustible», o «todo en supermercado». Responder no registra: falta el «confirmar» (o el registro automático, si está activo y no hay dudas).
+- Las respuestas cortas solo se toman como respuesta si hay **un** comprobante abierto, reciente y sin un gasto en curso, y si encajan con lo que se preguntó; un gasto nuevo («gasté 500 en el kiosco…») sigue su camino.
+- Los avisos técnicos de la lectura se dicen en simple («No pude leer el importe de un renglón») y los importes negativos se muestran bien («-$0,32»). En la web hay un selector «Categoría de todo el ticket».
+
 ## Subir archivos desde la web (fotos, PDF, CSV, Excel)
 
 La pantalla Comprobantes tiene «Subir archivo». Acepta foto (JPG/PNG), PDF, `.csv` y `.xlsx` (primera hoja, hasta 200 filas de datos y 5 MB). Se lee en el momento, **no se guarda el archivo ni su nombre**, y queda un borrador para revisar: cada fila se clasifica por categoría y la pantalla muestra el total por categoría de lo seleccionado. Nada se registra hasta confirmar. Requiere sesión de integrante (con Basic Auth no se puede subir). El mismo archivo no se procesa dos veces. Las planillas se leen sin dependencias externas (un `.xlsx` es un ZIP con XML) con tope de tamaño descomprimido; fórmulas y macros no se ejecutan, solo se leen valores.

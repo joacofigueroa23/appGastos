@@ -361,10 +361,48 @@ async function applyInvoice(db:Connection,doc:DocRow,draft:InvoiceDraft,viewer:V
  return 'Factura asociada al gasto fijo. Sigue pendiente de pago hasta que se registre el pago.';
 }
 
+// Respuesta corta a lo que el bot preguntó sobre un comprobante abierto, sin comando: «ayer», «20 mil», «Combustible». Solo con UN comprobante abierto
+// y fresco, sin un gasto en curso, y solo si lo escrito encaja con lo que se preguntó (un gasto nuevo, «gasté 500 en…», no se confunde).
+export function bareEdit(draft:ReceiptDraft,text:string,ctx:DraftContext):Edit[]|null{
+ const t=text.trim().replace(/[.!¡¿?]+$/g,'');
+ if(!t||t.split(/\s+/).length>4)return null;
+ if(draft.noExpense||draft.linkExpenseId)return null;
+ if(draft.total===null||toCents(draft.total)<=0){
+  if(!/^[\s$]*[\d.,]+\s*(?:mil|k|lucas|pesos)?\s*$/i.test(t))return null;
+  const v=parseAmountText(t);return v?[{type:'total',value:v}]:null;
+ }
+ if(!draft.date){
+  if(!/^(?:hoy|ayer|anteayer|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)$/i.test(t))return null;
+  const v=parseDateText(t,ctx.today);return v?[{type:'date',value:v}]:null;
+ }
+ const all=includedItems(draft).filter(i=>!i.adjustment),lacking=all.filter(i=>!i.categoryId);
+ if(!lacking.length)return null;
+ const c=findCategory(ctx.categories,t.replace(/^(?:en |va en |ponelo en |ponela en |la categoria |categoria |todo en |todo )+/i,'').trim());
+ if(!c)return null;
+ // Ningún renglón tiene categoría: la respuesta es para TODO el ticket. Si se separó alguno, es para el que falta.
+ return lacking.length===all.length?[{type:'ticketCategory',categoryId:c.id}]:[{type:'itemCategory',itemId:lacking[0].id,categoryId:c.id}];
+}
+async function bareAnswer(pool:Pool,db:Connection,member:{id:string;role:'admin'|'member'},family:string,text:string,hasConversation:boolean):Promise<{outcome:'document_command';reply:string}|null>{
+ if(hasConversation)return null;
+ const open:DocRow[]=(await db.query("SELECT * FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state='needs_review' AND kind IN ('purchase_receipt','payment_receipt') AND draft IS NOT NULL ORDER BY created_at FOR UPDATE",[family,member.id])).rows;
+ const doc=open[0],draft=asReceipt(doc?.draft??null);
+ if(open.length!==1||!draft||Date.now()-new Date(doc.updated_at).getTime()>conversationTtlMinutes()*60000)return null;
+ const ctx=await loadContext(db,family),edits=bareEdit(draft,text,ctx);
+ if(!edits)return null;
+ try{
+  const edited=await editDocument(db,doc,edits,member.role);
+  const auto=await tryAutoRegister(pool,db,doc,edited.draft,{memberId:member.id,role:member.role},ctx);
+  return {outcome:'document_command',reply:auto??receiptSummary(edited.draft as ReceiptDraft,ctx,doc.short_code)};
+ }catch(error){
+  if(error instanceof DocumentActionError||error instanceof ApiError)return {outcome:'document_command',reply:error.message+' '+COMMAND_HELP};
+  throw error;
+ }
+}
+
 // ---- Texto del usuario sobre sus comprobantes abiertos. Devuelve null si el mensaje no es para un comprobante (sigue su camino normal).
 export async function documentCommand(pool:Pool,db:Connection,member:{id:string;role:'admin'|'member'},family:string,text:string,hasConversation:boolean):Promise<{outcome:'document_command';reply:string}|null>{
  const cmd=parseCommand(text);
- if(!cmd)return null;
+ if(!cmd)return bareAnswer(pool,db,member,family,text,hasConversation);
  const code=('code' in cmd&&cmd.code?cmd.code.toUpperCase():undefined);
  if(cmd.type==='undo')return {outcome:'document_command' as const,reply:await undoLast(db,family,member)};
  const open:DocRow[]=(await db.query("SELECT * FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state IN ('received','processing','needs_review') ORDER BY created_at FOR UPDATE",[family,member.id])).rows;
@@ -395,7 +433,11 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
    case 'confirm':
     if(doc.kind==='card_statement')return say('Los resúmenes de tarjeta se revisan en la web (Comprobantes): ahí elegís qué importar.');
     if(doc.kind==='pending_invoice')return say(member.role==='admin'?'Las facturas pendientes se revisan en la web (Comprobantes).':'Esa factura queda pendiente de revisión por un administrador.');
-    return say(await confirmDocument(pool,db,doc,{memberId:member.id,role:member.role}));
+    {
+     // Si todavía falta algo, se pregunta lo que falta (una cosa por vez) en vez de listar errores.
+     try{return say(await confirmDocument(pool,db,doc,{memberId:member.id,role:member.role}));}
+     catch(error){const draft=asReceipt(doc.draft);if(error instanceof DocumentActionError&&draft&&!draft.noExpense&&!draft.linkExpenseId)return say(show(draft));throw error;}
+    }
    case 'cancel':return say(await cancelDocument(db,doc));
    case 'kind':return say((await changeKind(db,doc,cmd.value,member.role)).reply);
    case 'configList':{
@@ -424,6 +466,11 @@ export async function documentCommand(pool:Pool,db:Connection,member:{id:string;
    case 'date':{const v=parseDateText(cmd.raw,ctx.today);if(!v)return say('No entendí esa fecha. Probá con «fecha 10/10» o «fecha ayer».');edits=[{type:'date',value:v}];break;}
    case 'total':{const v=parseAmountText(cmd.raw);if(!v)return say('No entendí ese total. Probá con «total 19000».');edits=[{type:'total',value:v}];break;}
    case 'exclude':{const item=findItem(d,cmd.item);if(!item)return null;edits=[{type:'itemExcluded',itemId:item.id,excluded:true}];break;}
+   case 'ticketCategory':{
+    const category=findCategory(ctx.categories,cmd.category);
+    if(!category)return say('No encontré la categoría «'+cmd.category+'». Las categorías válidas son: '+ctx.categories.filter(c=>c.active).map(c=>c.name).join(', ')+'.');
+    edits=[{type:'ticketCategory',categoryId:category.id}];break;
+   }
    case 'itemCategory':{
     const item=findItem(d,cmd.item);
     if(!item)return null; // "gasté 500 en kiosco" no es un comando de este comprobante

@@ -60,6 +60,7 @@ export function DocumentsView(){
   </div>
   {(d.paymentMethod==='credit_card'||d.paymentMethod==='debit_card')&&<label className="text-xs text-slate-500 block">Tarjeta (opcional)<select aria-label="Tarjeta del comprobante" value={d.cardId||''} disabled={busy} onChange={e=>void edit([{type:'cardId',value:e.target.value||null}])} className={input+' block'}><option value="">Sin tarjeta especificada</option>{apiCards.filter(c=>c.active).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
   {!d.noExpense&&!d.linkExpenseId&&<div className="space-y-2">
+   <label className="text-xs text-slate-500 block">Categoría de todo el ticket<select aria-label="Categoría del ticket" disabled={busy} value={(()=>{const used=new Set(d.items.filter(i=>!i.adjustment&&!i.excluded).map(i=>i.categoryId));return used.size===1?[...used][0]||'':'';})()} onChange={e=>e.target.value&&void edit([{type:'ticketCategory',categoryId:e.target.value}])} className={input+' block'}><option value="">Elegir…</option>{sortedCategories(categories.filter(c=>c.active)).map(c=><option key={c.id} value={c.id}>{categoryLabel(c,categories)}</option>)}</select></label>
    <h3 className="text-sm font-bold">Conceptos</h3>
    {d.items.map(i=><div key={i.id} className={'flex flex-wrap items-center justify-between gap-3 text-sm '+(i.excluded?'opacity-40':'')}>
     <span className="min-w-0 flex-1 truncate">{i.adjustment&&<span className="text-xs text-amber-800 mr-1">Ajuste</span>}{i.description}</span>
