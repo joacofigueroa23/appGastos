@@ -19,7 +19,7 @@ export function classify(e:Extraction):DocumentKind{
 }
 // Avisos técnicos de la lectura dichos en simple («importe_ilegible:concepto» → «No pude leer el importe de un renglón»).
 const WARNINGS:Record<string,string>={'importe_ilegible:concepto':'No pude leer el importe de un renglón.','importe_ilegible:total':'No pude leer bien el total.','fecha_ilegible:documento':'No pude leer bien la fecha.',
- 'importe_ilegible:redondeo':'No pude leer el redondeo.',demasiados_conceptos:'El comprobante tiene muchos renglones: puede que falten algunos.',tipo_no_reconocido:'No estoy seguro de qué tipo de comprobante es.'};
+ 'importe_ilegible:redondeo':'No pude leer el redondeo.',lectura_dudosa:'No estoy seguro de haber leído bien el total o la fecha: revisalo con tu comprobante. Si no coincide, corregilo o mandame una foto más nítida.',demasiados_conceptos:'El comprobante tiene muchos renglones: puede que falten algunos.',tipo_no_reconocido:'No estoy seguro de qué tipo de comprobante es.'};
 export const friendlyWarning=(w:string)=>WARNINGS[w]??(/^[a-z_]+:[a-z_]+$/.test(w)?'No pude leer bien una parte del comprobante.':w);
 export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_receipt'|'payment_receipt',householdHint:boolean):ReceiptDraft{
  const notes:string[]=[],currency=e.currency||ctx.familyCurrency;
@@ -49,7 +49,7 @@ export function buildReceiptDraft(e:Extraction,ctx:DraftContext,kind:'purchase_r
   total,items,components:{discounts:[...e.discounts,...extraDiscounts],taxes:e.taxes,surcharges:e.surcharges,taxesIncluded:e.taxesIncluded===true,rounding},
   paymentMethod:e.paymentMethod,cardId:null,duplicates:[],linkExpenseId:null,noExpense,
   noExpenseReason:noExpense?(e.isCardPayment?'Parece el pago de un resumen de tarjeta: los consumos ya están en el resumen, no es un gasto nuevo.':'Parece una transferencia entre cuentas propias: no es un gasto.'):null,
-  paymentReference:e.paymentReference,notes:[...notes,...e.warnings.map(friendlyWarning)].slice(0,NOTE_MAX),
+  paymentReference:e.paymentReference,doubt:e.warnings.includes('lectura_dudosa')||undefined,notes:[...notes,...e.warnings.map(friendlyWarning)].slice(0,NOTE_MAX),
  };
  return recompute(draft);
 }
@@ -112,7 +112,7 @@ export function receiptProblems(d:ReceiptDraft,ctx:DraftContext):string[]{
 // Registro automático por el bot: solo un ticket o comprobante de pago COMPLETO (importe, fecha, categorías y medio de pago válidos), que no sea
 // "no es gasto", ni coincida con un gasto ya cargado (eso se pregunta). Todo lo demás espera la respuesta del usuario.
 export const autoRegisterEnabled=()=>process.env.DOCUMENT_AUTO_REGISTER!=='false';
-export const canAutoRegister=(d:ReceiptDraft,ctx:DraftContext)=>autoRegisterEnabled()&&!d.settle&&!d.noExpense&&!d.linkExpenseId&&d.duplicates.length===0&&receiptProblems(d,ctx).length===0;
+export const canAutoRegister=(d:ReceiptDraft,ctx:DraftContext)=>autoRegisterEnabled()&&!d.doubt&&!d.settle&&!d.noExpense&&!d.linkExpenseId&&d.duplicates.length===0&&receiptProblems(d,ctx).length===0;
 
 // ---- Ediciones del borrador. Las usan el chat y la web: así hay una sola regla.
 export type Edit=
@@ -151,10 +151,10 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
  let d:ReceiptDraft=draft;
  switch(edit.type){
   case 'scope':d={...d,scope:edit.value};break;
-  case 'date':if(!isDateOnly(edit.value))return fail('Esa fecha no es válida.');d={...d,date:edit.value};break;
+  case 'date':if(!isDateOnly(edit.value))return fail('Esa fecha no es válida.');d={...d,date:edit.value,doubt:undefined};break;
   case 'total':{
    if(!/^\d{1,12}(\.\d{1,2})?$/.test(edit.value)||toCents(edit.value)<=0)return fail('Ese total no es válido.');
-   d={...d,total:edit.value.includes('.')?edit.value:edit.value+'.00'};break;
+   d={...d,total:edit.value.includes('.')?edit.value:edit.value+'.00',doubt:undefined};break;
   }
   case 'paymentMethod':if(!(PAYMENT_CODES as readonly string[]).includes(edit.value))return fail('Medio de pago inválido.');d={...d,paymentMethod:edit.value,cardId:null};break;
   case 'cardId':if(edit.value&&!ctx.cards.some(c=>c.id===edit.value&&c.active))return fail('Esa tarjeta no existe o está inactiva.');d={...d,cardId:edit.value};break;

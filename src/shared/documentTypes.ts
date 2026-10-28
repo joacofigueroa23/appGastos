@@ -18,6 +18,8 @@ export interface ReceiptDraft {
  total:string|null;items:DraftItem[];components:{discounts:MoneyLine[];taxes:MoneyLine[];surcharges:MoneyLine[];taxesIncluded:boolean;rounding?:string|null};
  paymentMethod:PaymentCode|null;cardId:string|null;duplicates:DuplicateRef[];linkExpenseId:string|null;noExpense:boolean;noExpenseReason:string|null;
  paymentReference:string|null;notes:string[];
+ // La lectura quedó con una duda que el usuario debe ver (total o fecha dudosos): el bot no lo registra solo.
+ doubt?:boolean;
  // Obligación fija pendiente que este comprobante parece saldar (solo se calcula para administradores). Al confirmar se registra UN gasto y se vincula.
  settle?:{occurrenceId:string;label:string;categoryId:string}|null;
 }
