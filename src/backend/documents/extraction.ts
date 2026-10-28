@@ -2,6 +2,7 @@ import {GoogleGenAI,Type,type GenerateContentParameters} from '@google/genai';
 import {PAYMENT_CODES} from '../../shared/apiTypes';
 import {isDateOnly} from '../../utils/finance';
 import {normalizeName} from '../whatsapp/candidate';
+import {trace} from '../shared/trace';
 import {documentLimits} from './limits';
 import {DocumentError,type MediaMime} from './validate';
 import type {Extraction,ExtractedItem,ExtractedLine,ModelUsage,MoneyLine,StatementLineKind} from './types';
@@ -221,6 +222,7 @@ export function geminiDocumentExtractor(generate?:DocGenerate):DocumentExtractor
    }
   }
   const inTok=first.inTok,outTok=first.outTok;
+  trace('doc_read',{attempts,problems,doubtful:extraction.warnings.includes('lectura_dudosa'),type:extraction.documentType,model:used.model,hasTotal:extraction.totalAmount!==null,hasDate:extraction.documentDate!==null});
   return {extraction,usage:{model:used.model,promptTokens:inTok,outputTokens:outTok,totalTokens:first.total,attempts,
    estimatedCostUsd:pin!=null&&pout!=null&&inTok!=null&&outTok!=null?Math.round((inTok*pin+outTok*pout)/1e6*1e6)/1e6:null,ms:Date.now()-started}};
  };

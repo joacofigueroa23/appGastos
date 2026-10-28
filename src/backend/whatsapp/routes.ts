@@ -6,7 +6,7 @@ import {normalizePhone,validSignature} from './security';
 import {enqueue,type IncomingMessage,type MessageMedia} from './repository';
 import {geminiInterpreter,type Interpreter} from './interpretation';
 import type {AdminInterpreter} from './adminIntent';
-import {metaSender,metaTokenStatus,type ReplySender} from './transport';
+import {metaSender,metaTokenStatus,tappedButtonText,type ReplySender} from './transport';
 import {whatsappProcessor} from './processor';
 import {metaMediaFetcher} from '../documents/media';
 import {geminiDocumentExtractor} from '../documents/extraction';
@@ -61,7 +61,9 @@ export function registerWhatsApp(app:Express,pool:Pool|null,options:WhatsAppOpti
        if(!item||typeof item.id!=='string'||!item.id||item.id.length>256)throw new Error();
        media={id:item.id,mime:str(item.mime_type,100)||'',sha256:str(item.sha256,128),filename:str(item.filename,255),caption:str(item.caption,1024)};
       }
-      messages.push({id:m.id,sender,text:m.type==='text'?m.text.body:null,type:m.type,receivedAt:new Date(),metaTimestamp,media});
+      // Un toque de botón entra como el texto equivalente: sigue el mismo camino (y las mismas validaciones) que si lo hubiera escrito.
+      const tapped=m.type==='interactive'?tappedButtonText(m.interactive):null;
+      messages.push({id:m.id,sender,text:tapped??(m.type==='text'?m.text.body:null),type:tapped?'text':m.type,receivedAt:new Date(),metaTimestamp,media});
       if(messages.length>100)throw new Error();
      }
     }

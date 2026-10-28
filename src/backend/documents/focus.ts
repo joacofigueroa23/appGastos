@@ -1,5 +1,6 @@
 import type {Pool} from 'pg';
 import type {Connection} from '../expenses/repository';
+import {trace} from '../shared/trace';
 import {ApiError} from '../shared/errors';
 import {normalizeName,paymentEvidence} from '../whatsapp/candidate';
 import {conversationTtlMinutes} from '../whatsapp/config';
@@ -140,18 +141,22 @@ async function recover(pool:Pool,db:Connection,member:Member,family:string,kind:
  return say('Listo, cancelé todo lo pendiente ('+[conv?'gasto en curso':'',docs.length?docs.length+' comprobante'+(docs.length>1?'s':''):'',admin.length?'cambio de configuración':''].filter(Boolean).join(', ')+'). Lo que ya estaba registrado no se toca.');
 }
 
+async function traced(route:string,r:Reply|null,extra:Record<string,string|number|boolean|null|string[]>={}):Promise<Reply|null>{trace('bot_focus',{route,handled:r!==null,...extra});return r;}
 export async function focusedReply(pool:Pool,db:Connection,member:Member,family:string,text:string,hasConversation:boolean,turn?:TurnInterpreter|null):Promise<Reply|null>{
  const rules=parseRulesCommand(text);
  if(rules){
   const ctx=await loadContext(db,family);
-  return say(rules.type==='list'?await listRules(db,family,member,ctx):await forgetRule(db,family,member,rules.name));
+  return traced('rules',say(rules.type==='list'?await listRules(db,family,member,ctx):await forgetRule(db,family,member,rules.name)),{cmd:rules.type});
  }
  const recovery=parseRecovery(text);
- if(recovery)return recover(pool,db,member,family,recovery);
+ if(recovery)return traced('recovery',await recover(pool,db,member,family,recovery),{cmd:recovery});
  // Con un gasto en curso las respuestas son de ese gasto; para salir están «ese gasto no», «volvamos al ticket» y «cancelá todo».
  if(hasConversation)return null;
  const open:DocRow[]=(await db.query(OPEN_RECEIPT+' FOR UPDATE',[family,member.id])).rows;
  const doc=open[0],draft=asReceipt(doc?.draft??null);
+ // Varios comprobantes abiertos: un mensaje con datos no se aplica a ninguno por su cuenta; se pide el código.
+ if(open.length>1&&draft&&(planCompound(draft,text,await loadContext(db,family))||flat(text).split(' ').length<=3&&!/\d/.test(flat(text))))
+  return traced('multiple_open',say('Tenés varios comprobantes abiertos: '+open.map(label).join('; ')+'. Indicá el código, por ejemplo «confirmar '+open[0].short_code+'», o decí «cancelá todo».'),{open:open.length}) as Promise<Reply>;
  if(open.length!==1||!draft||Date.now()-new Date(doc.updated_at).getTime()>conversationTtlMinutes()*60000)return null;
  const ctx=await loadContext(db,family);
  // «Otra»: se muestran todas las categorías (la lista larga solo aparece cuando el usuario la pide).
@@ -163,12 +168,13 @@ export async function focusedReply(pool:Pool,db:Connection,member:Member,family:
   try{plan=planFromTurn(draft,text,await turn({text:text.slice(0,500),hoy:ctx.today,categorias:ctx.categories.filter(c=>c.active).map(c=>c.name),comprobante:{comercio:draft.description,total:draft.total}}),ctx);}
   catch(error){if(!(error instanceof InterpretationError))throw error;}
  }
+ trace('bot_focus',{route:plan?(plan.edits.length||plan.confirm?'compound':'cancel'):'unmatched',handled:plan!==null,edits:plan?.edits.map(e=>e.type)??[],confirm:plan?.confirm??false});
  if(plan?.cancel)return say(await cancelDocument(db,doc));
  if(!plan){
   // Una frase corta sin importe ni verbo de gasto, con un comprobante esperando, casi seguro es para el comprobante: no se abre un gasto nuevo.
   const t=flat(text);
   if(t.split(' ').length<=3&&!/\d/.test(t)&&!/^(?:gast|compr|pag|cobr|puse|carg|sali)/.test(t))
-   return say('Tengo abierto '+label(doc)+' y no entendí si tu mensaje es para ese. Decime la categoría, cómo pagaste o «cancelar». Para un gasto nuevo escribí el importe, por ejemplo «gasté 5000 en kiosco».');
+   return (trace('bot_focus',{route:'trap_guard',handled:true}),say('Tengo abierto '+label(doc)+' y no entendí si tu mensaje es para ese. Decime la categoría, cómo pagaste o «cancelar». Para un gasto nuevo escribí el importe, por ejemplo «gasté 5000 en kiosco».'));
   return null;
  }
  try{

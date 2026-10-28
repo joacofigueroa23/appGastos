@@ -13,7 +13,7 @@ const BLANK:Extraction={documentType:'purchase_receipt',merchant:null,documentDa
 // Sin categoría ni medio de pago: el bot tiene que preguntar. «cash» trae el pago resuelto y falta solo la categoría.
 const SCENARIOS:Record<string,Extraction>={
  nocat:{...BLANK,merchant:'Tienda Demo',documentDate:'2026-10-13',totalAmount:'9000.00',paymentMethod:'cash',items:[{description:'Bananas',amount:'9000.00',category:null}]},
- transfer:{...BLANK,documentType:'payment_receipt',merchant:'Brenda',documentDate:'2026-10-27',totalAmount:'11600.00',paymentStatus:'paid',items:[]},
+ transfer:{...BLANK,documentType:'payment_receipt',merchant:'Brenda',provider:'Mercado Pago',recipient:'Brenda',time:'18:19',documentDate:'2026-10-27',totalAmount:'11600.00',paymentStatus:'paid',items:[]},
 };
 const jpeg=(scenario:string)=>Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('SCENARIO:'+scenario),Buffer.alloc(8,1)]);
 const BETO='5491100000002';
@@ -164,5 +164,25 @@ test('Contexto: respuestas con varios datos, recuperación y cancelación',async
   assert.match(await say('mis reglas'),/tienda demo → Supermercado/);
   assert.match(await say('olvidá la regla de Tienda Demo'),/me olvidé/);
   assert.equal((await q('SELECT count(*)::int n FROM appgastos.category_rules')).rows[0].n,0);
+ });
+
+ await t.test('comprobante de Mercado Pago (Caso B): el vendedor es Brenda, no se infiere el medio de pago y se completa conversando',async()=>{
+  await clean();await photo('transfer');
+  const first=replies.at(-1)!.text;
+  assert.match(first,/Brenda/);assert.match(first,/\$11\.600/);assert.match(first,/27\/10\/2026/);assert.doesNotMatch(first,/de Mercado Pago/);
+  const ask=await say('Supermercado');
+  assert.match(ask,/¿Cómo pagaste\?/,'el medio de pago no se deduce del logo');assert.equal(await expenses(),0);
+  assert.match(await say('efectivo y confirmar'),/Registrado/);assert.equal(await expenses(),1);
+  // Confirmar de nuevo no duplica.
+  await say('confirmar');assert.equal(await expenses(),1);
+ });
+
+ await t.test('varios comprobantes abiertos: un mensaje con datos no se aplica a ninguno',async()=>{
+  await clean();await photo('nocat');await photo('nocat');
+  const reply=await say('Supermercado confirmar');
+  assert.match(reply,/varios comprobantes abiertos/);assert.equal(await expenses(),0);
+  assert.equal((await q("SELECT count(*)::int n FROM appgastos.documents WHERE state='needs_review'")).rows[0].n,2);
+  assert.match(await say('cancelá todo'),/2 comprobantes/);
+  assert.equal((await q("SELECT count(*)::int n FROM appgastos.documents WHERE state='needs_review'")).rows[0].n,0);
  });
 });
