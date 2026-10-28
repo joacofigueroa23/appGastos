@@ -23,7 +23,7 @@ import type {Interpretation} from '../../src/backend/whatsapp/candidate';
 export const ANON_KEY='anon-public-key';
 export {INITIAL_FAMILY_ID};
 const nothing:Interpretation={amount:null,amountText:null,dateText:null,currency:null,currencyText:null,merchant:null,description:null,category:null,paymentMethod:null,paymentMethodText:null,card:null};
-export async function sessionApp(opts:{documents?:DocumentDeps;admin?:AdminInterpreter}={}){
+export async function sessionApp(opts:{documents?:DocumentDeps;admin?:AdminInterpreter;turn?:import('../../src/backend/documents/turn').TurnInterpreter}={}){
  const db=await isolatedDatabase();await migrate(db.pool);await seed(db.pool);
  const q=(sql:string,args:unknown[]=[])=>db.pool.query(sql,args);
  const tokens:Record<string,string>={};
@@ -36,7 +36,7 @@ export async function sessionApp(opts:{documents?:DocumentDeps;admin?:AdminInter
  const supaUrl='http://127.0.0.1:'+(supa.address() as any).port;
  let interpretation:Interpretation=nothing;
  const replies:{to:string;text:string}[]=[];
- const processor=whatsappProcessor(db.pool,async()=>interpretation,async(to,text)=>{replies.push({to,text});},opts.documents,opts.admin);
+ const processor=whatsappProcessor(db.pool,async()=>interpretation,async(to,text)=>{replies.push({to,text});},opts.documents,opts.admin,opts.turn);
  const app=express();
  app.use(sessionAuth(db.pool,{url:supaUrl,anonKey:ANON_KEY}));
  registerWhatsApp(app,db.pool,{secret:'s',phoneNumberId:'1',startWorker:false,send:async()=>{}});

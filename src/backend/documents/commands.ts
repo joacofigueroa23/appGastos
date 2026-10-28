@@ -14,7 +14,7 @@ const CODE='([a-z0-9]{4})';
 export function parseCommand(text:string):Command|null{
  const t=clean(text);let m:RegExpExecArray|null;
  if((m=new RegExp('^(?:confirmar|confirmo|confirmado|si|ok|dale|listo|registrar|registralo|guardar|guardalo|aceptar)(?: '+CODE+')?$').exec(t)))return {type:'confirm',code:m[1]};
- if((m=new RegExp('^(?:cancelar|cancela|descartar|descarta|descartalo|no)(?: '+CODE+')?$').exec(t)))return {type:'cancel',code:m[1]};
+ if((m=new RegExp('^(?:cancelar|cancela|descartar|descarta|descartalo|no)(?: (?!todo$)'+CODE+')?$').exec(t)))return {type:'cancel',code:m[1]};
  if(/^(?:deshacer|deshacelo|deshace|anular|anulalo)(?: (?:el )?(?:ultimo|registro))?$/.test(t))return {type:'undo'};
  if(/^(?:es |gasto )?(?:de la casa|del hogar|casa)$/.test(t))return {type:'scope',value:'household'};
  if(/^(?:es |gasto )?personal$/.test(t))return {type:'scope',value:'personal'};

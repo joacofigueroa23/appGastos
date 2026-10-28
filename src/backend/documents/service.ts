@@ -16,6 +16,7 @@ import {prepareBulkAction} from '../whatsapp/admin';
 import {applyHint,captionHint,HINT_LABEL,listFromExtraction,type IntentHint} from './hint';
 import {withFixedMatch,withReceiptDuplicates,withStatementDuplicates} from './duplicates';
 import {fromCents,includedItems,primaryCategory,toCents} from './reconcile';
+import {applyRules,learnFromConfirmation,suggestCategories} from './rules';
 import {COMMAND_HELP,invoiceSummary,receiptSummary,statementSummary,unknownSummary} from './summary';
 import {findCategory,findItem,parseAmountText,parseCommand,parseDateText} from './commands';
 import type {DocumentKind,DocumentState,Draft,DraftLine,Extraction,InvoiceDraft,ReceiptDraft,StatementDraft} from './types';
@@ -147,6 +148,8 @@ export async function buildFor(db:Connection,doc:Pick<DocRow,'family_id'|'member
  const kind=classify(e),dup={author:viewer.role==='member'?viewer.memberId??undefined:undefined,admin:viewer.role==='admin'};
  if(kind==='purchase_receipt'||kind==='payment_receipt'){
   let draft=await withReceiptDuplicates(db,doc.family_id,dup,buildReceiptDraft(e,ctx,kind,doc.household_hint));
+  draft=await applyRules(db,doc.family_id,doc.member_id,draft,ctx);
+  draft.suggestions=await suggestCategories(db,doc.family_id,doc.member_id,draft.merchant,ctx);
   // Solo el administrador ve y puede saldar obligaciones fijas.
   if(viewer.role==='admin'&&kind==='payment_receipt')draft=await withFixedMatch(db,doc.family_id,draft);
   return {kind,draft:draft as Draft,reply:receiptSummary(draft,ctx,doc.short_code)};
@@ -298,6 +301,7 @@ export async function confirmDocument(pool:Pool,db:Connection,doc:DocRow,viewer:
  if(categoriesUsed.size>1)await attachItems(db,doc.family_id,expense.id,items);
  await db.query('UPDATE appgastos.expenses SET document_id=$2 WHERE id=$1',[expense.id,doc.id]);
  await finish(db,doc,'confirmed',null,{expenseId:expense.id,categories:categoriesUsed.size,settledOccurrenceId:settleOccurrence});
+ await learnFromConfirmation(db,doc.family_id,doc.member_id,draft);
  if(settleOccurrence)return '✅ Registré el pago de «'+draft.settle!.label+'» por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+'. La obligación quedó pagada y no descuenta de tus presupuestos.';
  const catName=(id:string|null)=>ctx.categories.find(c=>c.id===id)?.name;
  return '✅ Registrado: '+draft.description+' por '+draft.total!.replace(/\.00$/,'')+' '+draft.currency+(categoriesUsed.size>1?' repartido en '+categoriesUsed.size+' categorías':catName(items[0].categoryId)?' en '+catName(items[0].categoryId):'')+'.';

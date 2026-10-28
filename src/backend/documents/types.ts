@@ -12,5 +12,8 @@ export interface Extraction {
  // Lista escrita (a mano o impresa) de presupuestos mensuales por categoría o de gastos fijos: no es un comprobante, la usa el administrador para configurar.
  configList:{kind:'budget'|'fixed'|null;items:{name:string;amount:string|null;dueDay:number|null;category:string|null}[]};
  invoiceReference:string|null;concept:string|null;category:string|null;warnings:string[];missingFields:string[];
+ // Lectura con respaldo (opcionales: lo guardado antes no los tiene). provider = quien procesa el pago (Mercado Pago, un banco), nunca el comercio;
+ // recipient = quien cobra; evidence = el texto literal que se vio del total y la fecha, para cruzarlo con el valor normalizado.
+ provider?:string|null;recipient?:string|null;time?:string|null;evidence?:{total:string|null;date:string|null}|null;
 }
-export interface ModelUsage {model:string;promptTokens:number|null;outputTokens:number|null;totalTokens:number|null;estimatedCostUsd:number|null;ms:number}
+export interface ModelUsage {model:string;promptTokens:number|null;outputTokens:number|null;totalTokens:number|null;estimatedCostUsd:number|null;ms:number;attempts?:number}

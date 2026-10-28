@@ -15,18 +15,20 @@ import {answerQuery,parseQuery} from './queries';
 import {referenceDate} from './candidate';
 import {documentCommand,documentProcessor,expireDocuments,type DocumentDeps} from '../documents/service';
 import {parseCommand} from '../documents/commands';
+import {geminiTurnInterpreter,type TurnInterpreter} from '../documents/turn';
+import {focusedReply,hasOpenReceipt,isFocusCommand} from '../documents/focus';
 import {adminCommand} from './admin';
 import {adminFlow} from './adminFlow';
 import {geminiAdminInterpreter,isConfigWrite,type AdminInterpreter} from './adminIntent';
-export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender,documents?:DocumentDeps,adminInterpret?:AdminInterpreter){
- let adminInterpreter=adminInterpret;
+export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySender,documents?:DocumentDeps,adminInterpret?:AdminInterpreter,turnInterpret?:TurnInterpreter){
+ let adminInterpreter=adminInterpret,turnInterpreter=turnInterpret;
  const documentWorker=documents?documentProcessor(pool,documents):null;
  async function processNext(){
   const row=await claim(pool);if(!row)return false;
   try{
    // Hora real del mensaje: Meta si está, si no la recepción. Define fecha de referencia y vencimiento.
    const at=row.meta_timestamp??row.received_at;
-   let decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
+   let focused:string|null=null,decision:Decision,catalog:Catalog|undefined,conversation:Conversation|null=null;
    if(row.message_type==='image'||row.message_type==='document'){
     // Comprobante: se identifica al remitente igual que con un texto. El archivo se lee después; acá solo se acepta o se rechaza.
     const members=(await memberPhones(pool,row.family_id)) as Member[];
@@ -65,8 +67,13 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
       &&(await pool.query("SELECT 1 FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state='needs_review' AND kind IN ('purchase_receipt','payment_receipt') AND draft IS NOT NULL LIMIT 1",[row.family_id,matches[0].id])).rowCount!>0;
      const docReply=!query&&!adminReply&&(parseCommand(row.text_body!)!==null||mayBeAnswer)
       ?await transaction(pool,db=>documentCommand(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation)):null;
+     // Árbitro de contexto: recuperación («cancelá todo», «¿qué tengo pendiente?») y mensajes con varios datos para el comprobante abierto
+     // («Supermercado confirmar»). Va antes de interpretar un gasto nuevo para que un dato suelto no abra otro gasto.
+     const focusReply=!query&&!adminReply&&!docReply&&(isFocusCommand(row.text_body!)||await hasOpenReceipt(pool,row.family_id,matches[0].id))
+      ?await transaction(pool,db=>focusedReply(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation,turnInterpreter??(process.env.GEMINI_API_KEY?(turnInterpreter=geminiTurnInterpreter()):null))):null;
      if(adminReply)decision={kind:'reply',outcome:adminReply.outcome,reply:adminReply.reply};
      else if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};
+     else if(focusReply){focused=matches[0].id;decision={kind:'reply',outcome:focusReply.outcome,reply:focusReply.reply};}
      else if(query){const a=await answerQuery(pool,row.family_id,{role:matches[0].role==='admin'?'admin':'member',memberId:matches[0].id},query,at,catalog.familyCurrency);decision={kind:'reply',outcome:a.outcome,reply:a.reply};}
      else{
       // Configuración por WhatsApp: solo administradores. Gemini interpreta la frase; el backend valida, pregunta lo que falte y pide confirmación.
@@ -77,6 +84,8 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
      }
     }
    }
+   // Si el árbitro cerró el gasto en curso, el commit trabaja con el estado vigente (si no, daría ConversationChanged y reintentaría).
+   if(focused)conversation=await findActiveConversation(pool,row.family_id,focused);
    await transaction(pool,db=>commit(pool,db,row,at,decision,catalog,conversation));
   }catch(error){
    const changed=error instanceof ConversationChanged;

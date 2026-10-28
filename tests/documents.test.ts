@@ -80,7 +80,7 @@ test('Fase 2: comprobantes por WhatsApp, borradores, confirmación y revisión w
  const docs=async(where='true')=>(await q(`SELECT * FROM appgastos.documents WHERE ${where} ORDER BY created_at`)).rows;
  const lastDoc=async()=>(await docs()).at(-1);
  const expenses=async()=>(await q('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n as number;
- const clean=async()=>{await q('DELETE FROM appgastos.expense_items');await q('UPDATE appgastos.expenses SET document_id=NULL');await q('DELETE FROM appgastos.documents');await q('DELETE FROM appgastos.expenses');replies.length=0;};
+ const clean=async()=>{await q('DELETE FROM appgastos.category_rules');await q('DELETE FROM appgastos.expense_items');await q('UPDATE appgastos.expenses SET document_id=NULL');await q('DELETE FROM appgastos.documents');await q('DELETE FROM appgastos.expenses');replies.length=0;};
  const api=(token:string,method:string,path:string,body?:unknown)=>call('/api/documents'+path,token,method,body);
 
  await t.test('imagen y PDF válidos: se reciben, se leen y proponen; todavía no se registra nada (AC01, AC02, AC15)',async()=>{
