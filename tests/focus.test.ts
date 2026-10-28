@@ -38,7 +38,7 @@ test('Contexto: respuestas con varios datos, recuperación y cancelación',async
  const expenses=async()=>(await q('SELECT count(*)::int n FROM appgastos.expenses')).rows[0].n as number;
  const active=async()=>(await q("SELECT count(*)::int n FROM appgastos.whatsapp_conversations WHERE status='active'")).rows[0].n as number;
  const doc=async()=>(await q('SELECT * FROM appgastos.documents ORDER BY created_at DESC LIMIT 1')).rows[0];
- const clean=async()=>{await q('DELETE FROM appgastos.expense_items');await q('UPDATE appgastos.expenses SET document_id=NULL');await q('DELETE FROM appgastos.documents');await q('DELETE FROM appgastos.expenses');await q('UPDATE appgastos.whatsapp_messages SET conversation_id=NULL');await q('DELETE FROM appgastos.whatsapp_conversations');await q('DELETE FROM appgastos.admin_actions');replies.length=0;};
+ const clean=async()=>{await q('DELETE FROM appgastos.category_rules');await q('DELETE FROM appgastos.expense_items');await q('UPDATE appgastos.expenses SET document_id=NULL');await q('DELETE FROM appgastos.documents');await q('DELETE FROM appgastos.expenses');await q('UPDATE appgastos.whatsapp_messages SET conversation_id=NULL');await q('DELETE FROM appgastos.whatsapp_conversations');await q('DELETE FROM appgastos.admin_actions');replies.length=0;};
 
  await t.test('reconoce los comandos de recuperación',()=>{
   assert.equal(parseRecovery('¿Qué tengo pendiente?'),'pending');assert.equal(parseRecovery('cancelá todo'),'cancelAll');assert.equal(parseRecovery('Empezar de nuevo'),'cancelAll');
@@ -137,5 +137,32 @@ test('Contexto: respuestas con varios datos, recuperación y cancelación',async
   await clean();await photo('nocat');
   turn.next=proposal({cancel:true});await say('tirá esto, descartalo');
   assert.equal((await doc()).state,'cancelled');
+ });
+
+ await t.test('categorización asistida: aprende solo de lo que el usuario elige, sugiere hasta tres y se puede olvidar (Etapa E)',async()=>{
+  await clean();
+  // Primera vez: el comercio es desconocido y no hay historial → lista de categorías. El usuario elige y confirma: recién ahí se aprende.
+  await photo('nocat');
+  assert.match(replies.at(-1)!.text,/Tus categorías:/);
+  await say('Supermercado confirmar');
+  assert.equal((await q('SELECT count(*)::int n FROM appgastos.category_rules')).rows[0].n,1);
+  // Segunda vez: la categoría aprendida entra sola y queda avisado; lo que el usuario no eligió nunca crea una regla.
+  await photo('nocat');
+  assert.match(replies.at(-1)!.text,/Categoría: Supermercado/);assert.match(replies.at(-1)!.text,/Usé «Supermercado» porque así categorizaste/);
+  await say('confirmar');
+  assert.equal((await q('SELECT hits FROM appgastos.category_rules')).rows[0].hits,1,'una categoría sugerida por regla no refuerza la regla sola');
+  // Un comprobante de pago a una persona («Brenda») no recibe una categoría automática; ofrece opciones numeradas, máximo tres.
+  await photo('transfer');
+  const ask=replies.at(-1)!.text;
+  assert.match(ask,/¿En qué categoría va este pago\? 1\) Supermercado/);assert.doesNotMatch(ask,/Tus categorías:/);assert.ok((ask.match(/\d\) /g)||[]).length<=4);
+  assert.equal((await say('otra')).startsWith('Tus categorías:'),true);
+  const done=await say('1');
+  assert.match(done,/Categoría: Supermercado/);
+  assert.equal((await q('SELECT count(*)::int n FROM appgastos.category_rules')).rows[0].n,1,'«Brenda» no se mapea de forma permanente salvo que el usuario lo confirme');
+  // Revisión y borrado de reglas.
+  await clean();await photo('nocat');await say('Supermercado confirmar');
+  assert.match(await say('mis reglas'),/tienda demo → Supermercado/);
+  assert.match(await say('olvidá la regla de Tienda Demo'),/me olvidé/);
+  assert.equal((await q('SELECT count(*)::int n FROM appgastos.category_rules')).rows[0].n,0);
  });
 });

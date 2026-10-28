@@ -11,6 +11,7 @@ import {COMMAND_HELP,receiptSummary} from './summary';
 import type {ReceiptDraft} from './types';
 import {InterpretationError} from '../whatsapp/candidate';
 import type {TurnInterpreter,TurnProposal} from './turn';
+import {forgetRule,listRules} from './rules';
 import {cancelDocument,confirmDocument,DocumentActionError,editDocument,loadContext,tryAutoRegister,type DocRow} from './service';
 
 // Árbitro de contexto: decide qué tarea abierta del integrante recibe un mensaje que no es un comando exacto. Ordena la respuesta
@@ -30,6 +31,15 @@ export function parseRecovery(text:string):Recovery|null{
  return null;
 }
 
+// Reglas de categoría aprendidas: «mis reglas» las lista y «olvidá la regla de X» borra una (el administrador, también las de la familia).
+export type RulesCommand={type:'list'}|{type:'forget';name:string};
+export function parseRulesCommand(text:string):RulesCommand|null{
+ const t=flat(text);let m:RegExpExecArray|null;
+ if(/^(?:mis )?reglas(?: de categorias?)?$|^que aprendiste$|^que recordas de (?:las )?categorias$/.test(t))return {type:'list'};
+ if((m=/^(?:olvida|olvidate|borra|borrar|elimina|eliminar)(?: la)? regla (?:de |del )?(.+)$/.exec(t)))return {type:'forget',name:m[1]};
+ return null;
+}
+export const isFocusCommand=(text:string)=>parseRecovery(text)!==null||parseRulesCommand(text)!==null;
 const OPEN_RECEIPT="SELECT * FROM appgastos.documents WHERE family_id=$1 AND member_id=$2 AND state='needs_review' AND kind IN ('purchase_receipt','payment_receipt') AND draft IS NOT NULL ORDER BY created_at";
 export const hasOpenReceipt=async(pool:Pool,family:string,memberId:string)=>(await pool.query(OPEN_RECEIPT+' LIMIT 1',[family,memberId])).rowCount!>0;
 const asReceipt=(d:DocRow['draft']):ReceiptDraft|null=>d&&(d.kind==='purchase_receipt'||d.kind==='payment_receipt')?d:null;
@@ -82,6 +92,9 @@ export function planCompound(draft:ReceiptDraft,text:string,ctx:DraftContext):{e
   if(/^(?:efectivo|debito|credito|transferencia|billetera|mercado pago)$/.test(s)){const v=paymentEvidence(s);return v?{type:'paymentMethod',value:v}:null;}
   if(/^(?:casa|hogar|familia|familiar)$/.test(s))return {type:'scope',value:'household'};
   if(/^(?:personal|mio|mia|propio)$/.test(s))return {type:'scope',value:'personal'};
+  // «2» / «la 2» / «opción 2»: una de las categorías que el bot ofreció.
+  const pick=/^(?:opcion |numero )?([1-3])$/.exec(s);
+  if(pick&&!noTotal){const id=draft.suggestions?.[Number(pick[1])-1];return id&&ctx.categories.some(c=>c.id===id&&c.active)?categoryEdit(draft,id):null;}
   if(noTotal&&new RegExp('^'+AMOUNT+'$').test(s)){const v=parseAmountText(s);return v?{type:'total',value:v}:null;}
   const c=findCategory(ctx.categories,s);
   if(!c)return null;
@@ -128,6 +141,11 @@ async function recover(pool:Pool,db:Connection,member:Member,family:string,kind:
 }
 
 export async function focusedReply(pool:Pool,db:Connection,member:Member,family:string,text:string,hasConversation:boolean,turn?:TurnInterpreter|null):Promise<Reply|null>{
+ const rules=parseRulesCommand(text);
+ if(rules){
+  const ctx=await loadContext(db,family);
+  return say(rules.type==='list'?await listRules(db,family,member,ctx):await forgetRule(db,family,member,rules.name));
+ }
  const recovery=parseRecovery(text);
  if(recovery)return recover(pool,db,member,family,recovery);
  // Con un gasto en curso las respuestas son de ese gasto; para salir están «ese gasto no», «volvamos al ticket» y «cancelá todo».
@@ -136,6 +154,8 @@ export async function focusedReply(pool:Pool,db:Connection,member:Member,family:
  const doc=open[0],draft=asReceipt(doc?.draft??null);
  if(open.length!==1||!draft||Date.now()-new Date(doc.updated_at).getTime()>conversationTtlMinutes()*60000)return null;
  const ctx=await loadContext(db,family);
+ // «Otra»: se muestran todas las categorías (la lista larga solo aparece cuando el usuario la pide).
+ if(/^otra(?: categoria)?$/.test(flat(text)))return say('Tus categorías: '+ctx.categories.filter(c=>c.active).map(c=>c.name).join(', ')+'. ¿Cuál va?');
  let plan:{edits:Edit[];confirm:boolean;cancel?:boolean}|null=planCompound(draft,text,ctx);
  // Las reglas no entendieron: una sola consulta a Gemini (sin reintentos). Si falla o no es para el comprobante, sigue el camino normal.
  const t0=flat(text);

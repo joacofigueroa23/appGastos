@@ -166,12 +166,12 @@ export function applyEdit(draft:ReceiptDraft|StatementDraft,edit:Edit,ctx:DraftC
   case 'ticketCategory':
    if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
    // Toda la compra en esa categoría; los ajustes (IVA, redondeo, descuentos) la siguen solos.
-   d={...d,items:d.items.map(i=>i.adjustment?i:{...i,categoryId:edit.categoryId})};break;
+   d={...d,items:d.items.map(i=>i.adjustment?i:{...i,categoryId:edit.categoryId}),categoryByUser:true};break;
   case 'itemCategory':{
    const item=d.items.find(i=>i.id===edit.itemId);
    if(!item)return fail('Ese concepto no existe.');
    if(!activeCategory(edit.categoryId))return fail('Esa categoría no existe o está inactiva.');
-   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId,auto:false}:i)};break;
+   d={...d,items:d.items.map(i=>i.id===item.id?{...i,categoryId:edit.categoryId,auto:false}:i),categoryByUser:true};break;
   }
   case 'itemExcluded':{
    const item=d.items.find(i=>i.id===edit.itemId);

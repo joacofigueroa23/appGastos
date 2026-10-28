@@ -51,7 +51,12 @@ export function nextQuestion(d:ReceiptDraft,ctx:DraftContext):string|null{
  if(!items.length)return 'No encontré renglones con importe. Contame qué compraste y de cuánto fue, o mandame otra foto.';
  const all=items.filter(i=>!i.adjustment),lacking=all.filter(i=>!i.categoryId);
  // Sin categoría en ningún renglón: se pregunta UNA vez por todo el ticket. Si el usuario separó algún renglón, se pregunta por los que quedan.
- if(lacking.length&&lacking.length===all.length)return '¿En qué categoría va '+(d.kind==='payment_receipt'?'este pago':'este ticket')+'? Tus categorías: '+list+'.';
+ if(lacking.length&&lacking.length===all.length){
+  // Hasta tres opciones tocables con un número (lo aprendido del comercio y lo que más usa); sin historial, la lista de categorías.
+  const offered=(d.suggestions??[]).map(id=>ctx.categories.find(c=>c.id===id&&c.active)?.name).filter((n):n is string=>!!n);
+  const what=d.kind==='payment_receipt'?'este pago':'este ticket';
+  return offered.length?'¿En qué categoría va '+what+'? '+offered.map((n,i)=>(i+1)+') '+n).join('  ')+' — respondé el número, o decime otra.':'¿En qué categoría va '+what+'? Tus categorías: '+list+'.';
+ }
  if(lacking.length)return '¿En qué categoría va «'+lacking[0].description+'»? Tus categorías: '+list+'.';
  if(!d.paymentMethod)return '¿Cómo pagaste? Efectivo, débito, crédito, transferencia o billetera.';
  if(d.cardId&&!ctx.cards.some(c=>c.id===d.cardId&&c.active))return '¿Con qué tarjeta? La que había elegido ya no está disponible.';

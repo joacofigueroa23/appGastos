@@ -16,7 +16,7 @@ import {referenceDate} from './candidate';
 import {documentCommand,documentProcessor,expireDocuments,type DocumentDeps} from '../documents/service';
 import {parseCommand} from '../documents/commands';
 import {geminiTurnInterpreter,type TurnInterpreter} from '../documents/turn';
-import {focusedReply,hasOpenReceipt,parseRecovery} from '../documents/focus';
+import {focusedReply,hasOpenReceipt,isFocusCommand} from '../documents/focus';
 import {adminCommand} from './admin';
 import {adminFlow} from './adminFlow';
 import {geminiAdminInterpreter,isConfigWrite,type AdminInterpreter} from './adminIntent';
@@ -69,7 +69,7 @@ export function whatsappProcessor(pool:Pool,interpret:Interpreter,send:ReplySend
       ?await transaction(pool,db=>documentCommand(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation)):null;
      // Árbitro de contexto: recuperación («cancelá todo», «¿qué tengo pendiente?») y mensajes con varios datos para el comprobante abierto
      // («Supermercado confirmar»). Va antes de interpretar un gasto nuevo para que un dato suelto no abra otro gasto.
-     const focusReply=!query&&!adminReply&&!docReply&&(parseRecovery(row.text_body!)!==null||await hasOpenReceipt(pool,row.family_id,matches[0].id))
+     const focusReply=!query&&!adminReply&&!docReply&&(isFocusCommand(row.text_body!)||await hasOpenReceipt(pool,row.family_id,matches[0].id))
       ?await transaction(pool,db=>focusedReply(pool,db,{id:matches[0].id,role:matches[0].role==='admin'?'admin':'member'},row.family_id,row.text_body!,!!conversation,turnInterpreter??(process.env.GEMINI_API_KEY?(turnInterpreter=geminiTurnInterpreter()):null))):null;
      if(adminReply)decision={kind:'reply',outcome:adminReply.outcome,reply:adminReply.reply};
      else if(docReply)decision={kind:'reply',outcome:docReply.outcome,reply:docReply.reply};
